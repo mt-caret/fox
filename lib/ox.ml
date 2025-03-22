@@ -1,6 +1,8 @@
 open! Core
 open! Effect
 open! Effect.Deep
+module Expr = Expr
+module Value = Value
 
 module Eval = struct
   let handle ~f =
@@ -26,7 +28,7 @@ module Dual_number = struct
     ; tangent : Value.t
     ; id : Id.t
     }
-  [@@deriving sexp_of]
+  [@@deriving sexp_of, fields ~getters]
 
   let type_id = Type_equal.Id.create ~name:"Dual_number" [%sexp_of: t]
   let to_value t : Value.t = T (t, type_id)

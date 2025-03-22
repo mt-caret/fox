@@ -1,0 +1,53 @@
+open! Core
+open! Ox
+
+let f x =
+  let y = Value.O.(Value.sin x * Value.of_float 2.) in
+  let z = Value.O.(-y + x) in
+  z
+;;
+
+let%expect_test "eval" =
+  Eval.handle ~f:(fun () -> f (Value.of_float 3.)) |> [%sexp_of: Value.t] |> print_s;
+  [%expect {| (Tensor 2.7177599838802657) |}]
+;;
+
+let%expect_test "jvp" =
+  Eval.handle ~f:(fun () ->
+    jvp ~f:Value.sin ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.)
+    |> Dual_number.tangent
+    |> [%sexp_of: Value.t]
+    |> print_s;
+    Value.cos (Value.of_float 3.) |> [%sexp_of: Value.t] |> print_s);
+  [%expect
+    {|
+    (Tensor -0.98999249660044542)
+    (Tensor -0.98999249660044542)
+    |}];
+  Eval.handle ~f:(fun () ->
+    jvp ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
+  |> [%sexp_of: Dual_number.t]
+  |> print_s;
+  [%expect
+    {|
+    ((primal (Tensor 2.7177599838802657)) (tangent (Tensor 2.9799849932008908))
+     (id 1))
+    |}];
+  Eval.handle ~f:(fun () ->
+    let deriv ~n =
+      nth_order_derivative ~n ~f:Value.sin ~x:(Value.of_float 3.)
+      |> [%sexp_of: Value.t]
+      |> print_s
+    in
+    deriv ~n:1;
+    deriv ~n:2;
+    deriv ~n:3;
+    deriv ~n:4);
+  [%expect
+    {|
+    (Tensor -0.98999249660044542)
+    (Tensor -0.14112000805986721)
+    (Tensor 0.98999249660044542)
+    (Tensor 0.14112000805986721)
+    |}]
+;;
