@@ -47,6 +47,8 @@ let rec compare t1 t2 =
     compare t1 t2)
 ;;
 
+let type_id = Type_equal.Id.create ~name:"Tensor" [%sexp_of: t]
+
 let create_uninitialized dims =
   Bigarray.Genarray.create Bigarray.float64 Bigarray.c_layout dims
 ;;
@@ -122,10 +124,16 @@ let map2 t1 t2 ~f =
     reshape t ~dims:(dims t1)
 ;;
 
-let ( + ) t1 t2 = map2 t1 t2 ~f:( +. )
-let ( - ) t1 t2 = map2 t1 t2 ~f:( -. )
-let ( * ) t1 t2 = map2 t1 t2 ~f:( *. )
-let ( / ) t1 t2 = map2 t1 t2 ~f:( /. )
-let ( ~- ) t = map t ~f:( ~-. )
+let add t1 t2 = map2 t1 t2 ~f:( +. )
+let sub t1 t2 = map2 t1 t2 ~f:( -. )
+let mul t1 t2 = map2 t1 t2 ~f:( *. )
+let neg t = map t ~f:( ~-. )
 let sin t = map t ~f:Float.sin
 let cos t = map t ~f:Float.cos
+
+module O = struct
+  let ( + ) = add
+  let ( - ) = sub
+  let ( * ) = mul
+  let ( ~- ) = neg
+end
