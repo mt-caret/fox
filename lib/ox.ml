@@ -4,6 +4,19 @@ open! Effect.Deep
 module Expr = Expr
 module Value = Value
 
+let flatten_function
+      (type in_ out)
+      (module In : Treeable_intf.S with type t = in_)
+      (module Out : Treeable_intf.S with type t = out)
+      ~(f : in_ -> out)
+  =
+  Staged.stage (fun values ->
+    let in_tree = Value_tree.unflatten values ~def:In.tree_def in
+    let out = f (In.t_of_tree in_tree) in
+    let out_tree = Out.tree_of_t out in
+    Value_tree.flatten out_tree)
+;;
+
 module Eval = struct
   let handle ~f =
     try f () with
@@ -15,6 +28,11 @@ module Eval = struct
   ;;
 end
 
+(* foo(x) = x(x + 3) = x^2 + 3x
+   foo'(x) = 2x + 3
+   foo''(x) = 2
+   foo'''(x) = 0
+*)
 let foo x = Value.O.(x * (x + Value.of_float 3.))
 
 let%expect_test "foo" =
@@ -85,25 +103,70 @@ module Jvp = struct
   ;;
 end
 
-let jvp ~f ~primal ~tangent =
+let jvp
+      (type in_ out)
+      (module In : Treeable_intf.S with type t = in_)
+      (module Out : Treeable_intf.S with type t = out)
+      ~f
+      ~(primals : in_)
+      ~(tangents : in_)
+  =
   let jvp = Jvp.create () in
-  Jvp.handle jvp ~f:(fun () ->
-    f (Dual_number.to_value (Jvp.dual_number jvp ~primal ~tangent)))
-  |> Jvp.lift jvp
+  let inputs =
+    List.zip_exn
+      (In.tree_of_t primals |> Value_tree.flatten)
+      (In.tree_of_t tangents |> Value_tree.flatten)
+    |> List.map ~f:(fun (primal, tangent) ->
+      Dual_number.to_value (Jvp.dual_number jvp ~primal ~tangent))
+  in
+  let f = flatten_function (module In) (module Out) ~f |> Staged.unstage in
+  let primals, tangents =
+    Jvp.handle jvp ~f:(fun () -> f inputs)
+    |> List.map ~f:(Jvp.lift jvp)
+    |> List.map ~f:(fun { primal; tangent; id = _ } -> primal, tangent)
+    |> List.unzip
+  in
+  ( Out.t_of_tree (Value_tree.unflatten primals ~def:Out.tree_def)
+  , Out.t_of_tree (Value_tree.unflatten tangents ~def:Out.tree_def) )
+;;
+
+let%expect_test "jvp'" =
+  Eval.handle ~f:(fun () ->
+    jvp
+      (module Value)
+      (module Value)
+      ~f:foo
+      ~primals:(Value.of_float 2.)
+      ~tangents:(Value.of_float 1.))
+  |> [%sexp_of: Value.t * Value.t]
+  |> print_s;
+  [%expect {| ((Tensor 10) (Tensor 7)) |}]
+;;
+
+let jvp' ~f ~primal ~tangent =
+  jvp (module Value) (module Value) ~f ~primals:primal ~tangents:tangent
 ;;
 
 let%expect_test "jvp" =
   Eval.handle ~f:(fun () ->
-    jvp ~f:foo ~primal:(Value.of_float 2.) ~tangent:(Value.of_float 1.))
-  |> [%sexp_of: Dual_number.t]
+    jvp' ~f:foo ~primal:(Value.of_float 2.) ~tangent:(Value.of_float 1.))
+  |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((primal (Tensor 10)) (tangent (Tensor 7)) (id 0)) |}]
+  [%expect {| ((Tensor 10) (Tensor 7)) |}];
+  Eval.handle ~f:(fun () ->
+    jvp'
+      ~f:(fun x ->
+        let _, tangent = jvp' ~f:foo ~primal:x ~tangent:(Value.of_float 1.) in
+        tangent)
+      ~primal:(Value.of_float 2.)
+      ~tangent:(Value.of_float 1.))
+  |> [%sexp_of: Value.t * Value.t]
+  |> print_s;
+  [%expect {| ((Tensor 7) (Tensor 2)) |}]
 ;;
 
 let derivative ~f ~x =
-  let ({ primal = _; tangent; id = _ } : Dual_number.t) =
-    jvp ~f ~primal:x ~tangent:(Value.of_float 1.)
-  in
+  let (_primal : Value.t), tangent = jvp' ~f ~primal:x ~tangent:(Value.of_float 1.) in
   tangent
 ;;
 
@@ -229,11 +292,11 @@ let%expect_test "eval_expr" =
 
 let%expect_test "jvp and eval_expr" =
   Eval.handle ~f:(fun () ->
-    jvp
+    jvp'
       ~f:(fun x -> build_expr ~f:foo |> eval_expr ~values:[ x ])
       ~primal:(Value.of_float 2.)
       ~tangent:(Value.of_float 1.))
-  |> [%sexp_of: Dual_number.t]
+  |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((primal (Tensor 10)) (tangent (Tensor 7)) (id 13)) |}]
+  [%expect {| ((Tensor 10) (Tensor 7)) |}]
 ;;

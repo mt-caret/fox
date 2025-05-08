@@ -1,6 +1,9 @@
 open! Core
 include Value0
 
+let tree_def = Value_tree.Def.leaf
+let tree_of_t t = Value_tree.of_value t
+let t_of_tree tree = Value_tree.to_value_exn tree
 let of_tensor t = T (t, Tensor.type_id)
 
 let to_tensor_exn (T (x, id) as t) : Tensor.t =

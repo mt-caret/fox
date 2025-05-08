@@ -2,6 +2,6 @@
  (public_name ox)
  (name ox)
  (inline_tests)
- (libraries core)
+ (libraries core ppx_typed_fields.typed_fields_lib)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_jane ppx_typed_fields base_quickcheck.ppx_quickcheck)))

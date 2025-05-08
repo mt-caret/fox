@@ -14,8 +14,8 @@ let%expect_test "eval" =
 
 let%expect_test "jvp" =
   Eval.handle ~f:(fun () ->
-    jvp ~f:Value.sin ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.)
-    |> Dual_number.tangent
+    jvp' ~f:Value.sin ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.)
+    |> snd
     |> [%sexp_of: Value.t]
     |> print_s;
     Value.cos (Value.of_float 3.) |> [%sexp_of: Value.t] |> print_s);
@@ -25,14 +25,11 @@ let%expect_test "jvp" =
     (Tensor -0.98999249660044542)
     |}];
   Eval.handle ~f:(fun () ->
-    jvp ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
-  |> [%sexp_of: Dual_number.t]
+    jvp' ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
+  |> [%sexp_of: Value.t * Value.t]
   |> print_s;
   [%expect
-    {|
-    ((primal (Tensor 2.7177599838802657)) (tangent (Tensor 2.9799849932008908))
-     (id 1))
-    |}];
+    {| ((Tensor 2.7177599838802657) (Tensor 2.9799849932008908)) |}];
   Eval.handle ~f:(fun () ->
     let deriv ~n =
       nth_order_derivative ~n ~f:Value.sin ~x:(Value.of_float 3.)
