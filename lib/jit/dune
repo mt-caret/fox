@@ -1,5 +1,5 @@
 (library
- (name ox_test)
+ (name ox_jit)
  (inline_tests)
  (libraries core ox_core)
  (preprocess

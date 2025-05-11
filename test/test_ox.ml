@@ -1,5 +1,5 @@
 open! Core
-open! Ox
+open! Ox_core
 
 let f x =
   let y = Value.O.(Value.sin x * Value.of_float 2.) in
@@ -28,8 +28,7 @@ let%expect_test "jvp" =
     jvp' ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect
-    {| ((Tensor 2.7177599838802657) (Tensor 2.9799849932008908)) |}];
+  [%expect {| ((Tensor 2.7177599838802657) (Tensor 2.9799849932008908)) |}];
   Eval.handle ~f:(fun () ->
     let deriv ~n =
       nth_order_derivative ~n ~f:Value.sin ~x:(Value.of_float 3.)
