@@ -32,4 +32,5 @@ module type Treeable = sig
     S with type t := Conv.t
 
   module Of_typed_fields (T : Of_typed_fields_arg) : S with type t := T.t
+  module Tuple2 (A : S) (B : S) : S with type t = A.t * B.t
 end

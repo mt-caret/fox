@@ -31,3 +31,17 @@ module Of_typed_fields (T : Of_typed_fields_arg) : S with type t := T.t = struct
       }
   ;;
 end
+
+module Tuple2 (A : S) (B : S) : S with type t = A.t * B.t = struct
+  type t = A.t * B.t
+
+  let tree_of_t (a, b) =
+    Value_tree.node
+      (String.Map.of_alist_exn [ "fst", A.tree_of_t a; "snd", B.tree_of_t b ])
+  ;;
+
+  let t_of_tree tree =
+    ( A.t_of_tree (Value_tree.get_exn tree "fst")
+    , B.t_of_tree (Value_tree.get_exn tree "snd") )
+  ;;
+end

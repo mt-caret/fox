@@ -90,10 +90,24 @@ let jit
 let jit' ~f ~x = jit (module Value) (module Value) ~f x
 
 let%expect_test "jit'" =
+  (* Filters out noisy XLA log message *)
+  let print output =
+    String.split_lines output
+    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
+    |> String.concat
+    |> print_endline
+  in
   jit' ~f:foo ~x:(Value.of_float 2.) |> [%sexp_of: Value.t] |> print_s;
-  String.split_lines [%expect.output]
-  |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
-  |> String.concat
-  |> print_endline;
-  [%expect {| (Tensor 10) |}]
+  print [%expect.output];
+  [%expect {| (Tensor 10) |}];
+  (* Two-argument function *)
+  jit
+    (module Treeable.Tuple2 (Value) (Value))
+    (module Value)
+    ~f:(fun (a, b) -> Value.O.(Value.sin a * Value.cos b))
+    (Value.of_float 2., Value.of_float 3.)
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  print [%expect.output];
+  [%expect {| (Tensor -0.90019762973551742) |}]
 ;;

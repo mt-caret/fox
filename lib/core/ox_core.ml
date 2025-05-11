@@ -4,6 +4,7 @@ open! Effect.Deep
 module Expr = Expr
 module Op = Op
 module Tensor = Tensor
+module Treeable = Treeable
 module Treeable_intf = Treeable_intf
 module Value = Value
 module Value_tree = Value_tree
