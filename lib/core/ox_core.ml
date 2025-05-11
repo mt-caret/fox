@@ -2,7 +2,11 @@ open! Core
 open! Effect
 open! Effect.Deep
 module Expr = Expr
+module Op = Op
+module Tensor = Tensor
+module Treeable_intf = Treeable_intf
 module Value = Value
+module Value_tree = Value_tree
 
 let flatten_function
       (type in_ out)
@@ -271,7 +275,7 @@ let build_expr
   ; equations = List.rev staging.equations
   ; return_vals =
       Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value
-  ; out_tree_def
+  ; out_tree_def = Set_once.get_exn out_tree_def [%here]
   }
 ;;
 
@@ -327,8 +331,7 @@ let eval_expr
     in
     Nonempty_list.map expr.return_vals ~f:(eval_atom ~env) |> Nonempty_list.to_list
   in
-  let out_tree_def = Set_once.get_exn expr.out_tree_def [%here] in
-  Value_tree.unflatten output ~def:out_tree_def |> Out.t_of_tree
+  Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree
 ;;
 
 let eval_expr' = eval_expr (module Value) (module Value)

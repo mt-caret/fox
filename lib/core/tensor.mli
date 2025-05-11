@@ -21,3 +21,13 @@ val map : t -> f:(float -> float) -> t
 val map2 : t -> t -> f:(float -> float -> float) -> t
 
 include Operators_intf.S with type t := t
+
+module Private : sig
+  val to_bigarray
+    :  t
+    -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
+
+  val of_bigarray
+    :  (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
+    -> t
+end

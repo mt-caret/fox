@@ -137,3 +137,8 @@ module O = struct
   let ( * ) = mul
   let ( ~- ) = neg
 end
+
+module Private = struct
+  let to_bigarray = Fn.id
+  let of_bigarray = Fn.id
+end
