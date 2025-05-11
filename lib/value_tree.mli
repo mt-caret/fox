@@ -8,10 +8,11 @@ val of_value : Value0.t -> t
 val to_value_exn : t -> Value0.t
 
 module Def : sig
-  type t
+  type t [@@deriving sexp_of, compare]
 
   val leaf : t
   val node : t String.Map.t -> t
+  val length : t -> int
 end
 
 val to_def : t -> Def.t

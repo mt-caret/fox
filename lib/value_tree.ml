@@ -36,11 +36,12 @@ let to_value_exn : t -> Value0.t = function
 ;;
 
 module Def = struct
-  type t = unit General.t [@@deriving sexp, quickcheck]
+  type t = unit General.t [@@deriving sexp, compare, quickcheck]
 
   let leaf = General.leaf ()
   let node = General.node
   let create tree = General.map tree ~f:(ignore : Value0.t -> unit)
+  let length = General.length
 end
 
 let to_def = Def.create

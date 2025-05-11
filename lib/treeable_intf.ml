@@ -3,8 +3,6 @@ open! Core
 module type S = sig
   type t
 
-  (* TODO: consider making this lazy? *)
-  val tree_def : Value_tree.Def.t
   val tree_of_t : t -> Value_tree.t
   val t_of_tree : Value_tree.t -> t
 end

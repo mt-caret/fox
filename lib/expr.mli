@@ -28,7 +28,8 @@ end
 type t =
   { parameters : Var.t list
   ; equations : Eq.t list
-  ; return_val : Atom.t
+  ; return_vals : Atom.t Nonempty_list.t
+  ; out_tree_def : Value_tree.Def.t Set_once.t
   }
 [@@deriving sexp_of]
 

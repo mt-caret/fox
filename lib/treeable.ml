@@ -5,22 +5,12 @@ module Conv (Treeable : S) (Conv : Conv_arg with type treeable := Treeable.t) :
   S with type t := Conv.t = struct
   include Conv
 
-  let tree_def = Treeable.tree_def
   let tree_of_t t = to_treeable t |> Treeable.tree_of_t
   let t_of_tree tree = Treeable.t_of_tree tree |> of_treeable
 end
 
 module Of_typed_fields (T : Of_typed_fields_arg) : S with type t := T.t = struct
   include T
-
-  let tree_def =
-    List.map Typed_fields.Packed.all ~f:(fun { f = T field } ->
-      let name = Typed_fields.name field in
-      let _, (module T) = field_treeable field in
-      name, T.tree_def)
-    |> String.Map.of_alist_exn
-    |> Value_tree.Def.node
-  ;;
 
   let tree_of_t t =
     List.map Typed_fields.Packed.all ~f:(fun { f = T field } ->

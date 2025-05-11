@@ -46,14 +46,20 @@ end
 type t =
   { parameters : Var.t list
   ; equations : Eq.t list
-  ; return_val : Atom.t
+  ; return_vals : Atom.t Nonempty_list.t
+  ; out_tree_def : Value_tree.Def.t Set_once.t
   }
 [@@deriving sexp_of]
 
-let to_string_hum { parameters; equations; return_val } =
+let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
   let parameters =
     String.concat ~sep:" " (List.map parameters ~f:(fun (Var name) -> name))
   in
   let equations = String.concat ~sep:"\n" (List.map equations ~f:Eq.to_string) in
-  [%string "%{parameters#String} ->\n%{equations#String}\nin %{return_val#Atom}"]
+  let return_vals =
+    Nonempty_list.to_list return_vals
+    |> List.map ~f:Atom.to_string
+    |> String.concat ~sep:", "
+  in
+  [%string "%{parameters#String} ->\n%{equations#String}\nin ( %{return_vals} )"]
 ;;

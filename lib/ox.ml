@@ -9,12 +9,17 @@ let flatten_function
       (module In : Treeable_intf.S with type t = in_)
       (module Out : Treeable_intf.S with type t = out)
       ~(f : in_ -> out)
+      ~in_tree_def
+      ~here
   =
-  Staged.stage (fun values ->
-    let in_tree = Value_tree.unflatten values ~def:In.tree_def in
-    let out = f (In.t_of_tree in_tree) in
-    let out_tree = Out.tree_of_t out in
-    Value_tree.flatten out_tree)
+  let out_tree_def = Set_once.create () in
+  ( Staged.stage (fun values ->
+      let in_tree = Value_tree.unflatten values ~def:in_tree_def in
+      let out = f (In.t_of_tree in_tree) in
+      let out_tree = Out.tree_of_t out in
+      Set_once.set_exn out_tree_def here (Value_tree.to_def out_tree);
+      Value_tree.flatten out_tree)
+  , out_tree_def )
 ;;
 
 module Eval = struct
@@ -112,22 +117,34 @@ let jvp
       ~(tangents : in_)
   =
   let jvp = Jvp.create () in
+  let primals_tree, tangents_tree = In.tree_of_t primals, In.tree_of_t tangents in
+  let primals_tree_def, tangents_tree_def =
+    Value_tree.to_def primals_tree, Value_tree.to_def tangents_tree
+  in
+  [%test_eq: Value_tree.Def.t] primals_tree_def tangents_tree_def;
   let inputs =
-    List.zip_exn
-      (In.tree_of_t primals |> Value_tree.flatten)
-      (In.tree_of_t tangents |> Value_tree.flatten)
+    List.zip_exn (Value_tree.flatten primals_tree) (Value_tree.flatten tangents_tree)
     |> List.map ~f:(fun (primal, tangent) ->
       Dual_number.to_value (Jvp.dual_number jvp ~primal ~tangent))
   in
-  let f = flatten_function (module In) (module Out) ~f |> Staged.unstage in
+  let f, out_tree_def =
+    flatten_function
+      (module In)
+      (module Out)
+      ~f
+      ~in_tree_def:primals_tree_def
+      ~here:[%here]
+  in
+  let f = Staged.unstage f in
   let primals, tangents =
     Jvp.handle jvp ~f:(fun () -> f inputs)
     |> List.map ~f:(Jvp.lift jvp)
     |> List.map ~f:(fun { primal; tangent; id = _ } -> primal, tangent)
     |> List.unzip
   in
-  ( Out.t_of_tree (Value_tree.unflatten primals ~def:Out.tree_def)
-  , Out.t_of_tree (Value_tree.unflatten tangents ~def:Out.tree_def) )
+  let out_tree_def = Set_once.get_exn out_tree_def [%here] in
+  ( Out.t_of_tree (Value_tree.unflatten primals ~def:out_tree_def)
+  , Out.t_of_tree (Value_tree.unflatten tangents ~def:out_tree_def) )
 ;;
 
 let%expect_test "jvp'" =
@@ -229,62 +246,95 @@ module Staging = struct
   ;;
 end
 
-let build_expr ~f : Expr.t =
+(* TODO: could [Expr.t] instead be something like [(in_, out) Expr.t], storing
+   the modules internally? *)
+let build_expr
+      (type in_ out)
+      (module In : Treeable_intf.S with type t = in_)
+      (module Out : Treeable_intf.S with type t = out)
+      ~f
+      ~in_tree_def
+  : Expr.t
+  =
+  let arguments = Value_tree.Def.length in_tree_def in
   let staging = Staging.create () in
-  let parameter = Staging.fresh_var staging in
-  let result =
-    Staging.handle staging ~f:(fun () -> f (Value.T (parameter, Expr.Var.type_id)))
+  let parameters = List.init arguments ~f:(fun _ -> Staging.fresh_var staging) in
+  let f, out_tree_def =
+    flatten_function (module In) (module Out) ~f ~in_tree_def ~here:[%here]
   in
-  { parameters = [ parameter ]
+  let f = Staged.unstage f in
+  let result =
+    Staging.handle staging ~f:(fun () ->
+      List.map parameters ~f:(fun parameter -> Value.T (parameter, Expr.Var.type_id)) |> f)
+  in
+  { parameters
   ; equations = List.rev staging.equations
-  ; return_val = Expr.Atom.of_value result
+  ; return_vals =
+      Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value
+  ; out_tree_def
   }
 ;;
 
+let build_expr' ~f : Expr.t =
+  build_expr (module Value) (module Value) ~f ~in_tree_def:Value.tree_def
+;;
+
 let%expect_test "build_expr" =
-  build_expr ~f:foo |> Expr.to_string_hum |> print_endline;
+  build_expr' ~f:foo |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
     v_0 ->
     v_1 = add v_0 (Tensor 3)
     v_2 = mul v_0 v_1
-    in v_2
+    in ( v_2 )
     |}]
 ;;
 
 let%expect_test "build_expr2" =
-  build_expr ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.))
+  build_expr' ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.))
   |> Expr.to_string_hum
   |> print_endline;
   [%expect
     {|
     v_0 ->
     v_1 = mul (Tensor 2) (Tensor 2)
-    in v_1
+    in ( v_1 )
     |}]
 ;;
 
-let eval_expr (expr : Expr.t) ~values =
-  let eval_atom (atom : Expr.Atom.t) env =
-    match atom with
-    | Var var -> Map.find_exn env var
-    | Value value -> value
+let eval_expr
+      (type in_ out)
+      (module In : Treeable_intf.S with type t = in_)
+      (module Out : Treeable_intf.S with type t = out)
+      (expr : Expr.t)
+      (input : in_)
+  : out
+  =
+  let values = In.tree_of_t input |> Value_tree.flatten in
+  let output =
+    let eval_atom (atom : Expr.Atom.t) ~env =
+      match atom with
+      | Var var -> Map.find_exn env var
+      | Value value -> value
+    in
+    let env =
+      List.fold
+        expr.equations
+        ~init:(List.zip_exn expr.parameters values |> Expr.Var.Map.of_alist_exn)
+        ~f:(fun env eq ->
+          let result = Op.map eq.op ~f:(eval_atom ~env) |> Op.eval (module Value) in
+          Map.add_exn env ~key:eq.var ~data:result)
+    in
+    Nonempty_list.map expr.return_vals ~f:(eval_atom ~env) |> Nonempty_list.to_list
   in
-  let env =
-    List.fold
-      expr.equations
-      ~init:(List.zip_exn expr.parameters values |> Expr.Var.Map.of_alist_exn)
-      ~f:(fun env eq ->
-        let result =
-          Op.map eq.op ~f:(fun atom -> eval_atom atom env) |> Op.eval (module Value)
-        in
-        Map.add_exn env ~key:eq.var ~data:result)
-  in
-  eval_atom expr.return_val env
+  let out_tree_def = Set_once.get_exn expr.out_tree_def [%here] in
+  Value_tree.unflatten output ~def:out_tree_def |> Out.t_of_tree
 ;;
 
+let eval_expr' = eval_expr (module Value) (module Value)
+
 let%expect_test "eval_expr" =
-  Eval.handle ~f:(fun () -> build_expr ~f:foo |> eval_expr ~values:[ Value.of_float 2. ])
+  Eval.handle ~f:(fun () -> eval_expr' (build_expr' ~f:foo) (Value.of_float 2.))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect {| (Tensor 10) |}]
@@ -293,7 +343,7 @@ let%expect_test "eval_expr" =
 let%expect_test "jvp and eval_expr" =
   Eval.handle ~f:(fun () ->
     jvp'
-      ~f:(fun x -> build_expr ~f:foo |> eval_expr ~values:[ x ])
+      ~f:(fun x -> eval_expr' (build_expr' ~f:foo) x)
       ~primal:(Value.of_float 2.)
       ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
