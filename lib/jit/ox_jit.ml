@@ -65,6 +65,12 @@ let xla_callable (expr : Expr.t) =
     |> Nonempty_list.map ~f:tensor_of_xla_literal)
 ;;
 
+(* TODO: One crucial difference between the implementation here and autodidax is
+   that the compilation is not cached. One approach would be to have
+   [jit] take an [in_tree_def] argument, and return a staged function of type
+   [in_ -> out] (with some validation that the tree def matches up, or
+   alternatively recompile if it doesn't?).
+*)
 let jit
       (type in_ out)
       (module In : Treeable_intf.S with type t = in_)
