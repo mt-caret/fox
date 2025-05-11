@@ -350,3 +350,55 @@ let%expect_test "jvp and eval_expr" =
   |> print_s;
   [%expect {| ((Tensor 10) (Tensor 7)) |}]
 ;;
+
+let%expect_test "nth_order_derivative build_expr" =
+  let print ~n =
+    build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x)
+    |> Expr.to_string_hum
+    |> print_endline
+  in
+  print ~n:0;
+  [%expect
+    {|
+    v_0 ->
+    v_1 = add v_0 (Tensor 3)
+    v_2 = mul v_0 v_1
+    in ( v_2 )
+    |}];
+  print ~n:1;
+  [%expect
+    {|
+    v_0 ->
+    v_1 = add (Tensor 1) (Tensor 0)
+    v_2 = add v_0 (Tensor 3)
+    v_3 = mul v_0 v_1
+    v_4 = mul (Tensor 1) v_2
+    v_5 = add v_4 v_3
+    v_6 = mul v_0 v_2
+    in ( v_5 )
+    |}];
+  print ~n:2;
+  [%expect
+    {|
+    v_0 ->
+    v_1 = add (Tensor 0) (Tensor 0)
+    v_2 = add (Tensor 1) (Tensor 0)
+    v_3 = add (Tensor 1) (Tensor 0)
+    v_4 = add v_0 (Tensor 3)
+    v_5 = mul v_0 v_1
+    v_6 = mul (Tensor 1) v_2
+    v_7 = add v_6 v_5
+    v_8 = mul v_0 v_2
+    v_9 = mul (Tensor 1) v_3
+    v_10 = mul (Tensor 0) v_4
+    v_11 = add v_10 v_9
+    v_12 = mul (Tensor 1) v_4
+    v_13 = add v_11 v_7
+    v_14 = add v_12 v_8
+    v_15 = mul v_0 v_3
+    v_16 = mul (Tensor 1) v_4
+    v_17 = add v_16 v_15
+    v_18 = mul v_0 v_4
+    in ( v_13 )
+    |}]
+;;
