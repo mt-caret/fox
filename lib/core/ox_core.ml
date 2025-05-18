@@ -664,3 +664,145 @@ let%expect_test "linearize" =
     in ( v_2 )
     |}]
 ;;
+
+let eval_expr_transposed (expr : Expr.t) args ~cotangents =
+  let accum_gradient ~ct_env var value =
+    Map.update ct_env var ~f:(function
+      | None -> value
+      | Some existing -> Value.O.(existing + value))
+  in
+  let read_gradient ~ct_env var =
+    (* TODO: some sort of type inference / add a new variant for "zero"? *)
+    Map.find ct_env var
+    |> Option.value_or_thunk ~default:(fun () ->
+      Tensor.zeros ~dims:[||] |> Value.of_tensor)
+  in
+  let ct_env =
+    List.zip_exn (Nonempty_list.to_list expr.return_vals) cotangents
+    |> List.fold ~init:Expr.Var.Map.empty ~f:(fun ct_env (return_val, cotangent) ->
+      match return_val with
+      | Value _ ->
+        (* TODO: do we actually want to just ignore constnats? *)
+        raise_s [%message "unexpected const return value" (return_val : Expr.Atom.t)]
+      | Var var -> accum_gradient ~ct_env var cotangent)
+  in
+  let ct_env =
+    List.rev expr.equations
+    |> List.fold ~init:ct_env ~f:(fun ct_env { var; op } ->
+      let cotangent = read_gradient ~ct_env var in
+      let ct_env =
+        match op with
+        | Add (Var var, Value _) | Add (Value _, Var var) ->
+          accum_gradient ~ct_env var cotangent
+        | Add (Var v1, Var v2) ->
+          let ct_env = accum_gradient ~ct_env v1 cotangent in
+          accum_gradient ~ct_env v2 cotangent
+        | Sub (Var var, Value _) -> accum_gradient ~ct_env var cotangent
+        | Sub (Value _, Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Mul (Var var, Value v) | Mul (Value v, Var var) ->
+          accum_gradient ~ct_env var (Value.mul v cotangent)
+        | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
+        | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
+        | Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ ->
+          raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
+      in
+      ct_env)
+  in
+  List.map args ~f:(read_gradient ~ct_env)
+;;
+
+let vjp
+      (type in_ out)
+      (module In : Treeable_intf.S with type t = in_)
+      (module Out : Treeable_intf.S with type t = out)
+      ~(f : in_ -> out)
+      ~(primals : in_)
+  =
+  let primals_tree = In.tree_of_t primals in
+  let primals_tree_def = Value_tree.to_def primals_tree in
+  let primals =
+    Value_tree.flatten primals_tree
+    |> List.map ~f:(fun value -> Partial_value.Known value)
+  in
+  let primals_length = List.length primals in
+  let tangent_vars =
+    List.init primals_length ~f:(fun i -> Expr.Var.Var [%string "a_%{i#Int}"])
+  in
+  let inputs =
+    List.append primals (List.map tangent_vars ~f:(fun var -> Partial_value.Unknown var))
+  in
+  let outputs, expr =
+    partially_apply_expr_flat inputs ~f:(fun inputs ->
+      let primals, tangents = List.split_n inputs primals_length in
+      let out_primal, out_tangent =
+        jvp
+          (module In)
+          (module Out)
+          ~f
+          ~primals:(Value_tree.unflatten primals ~def:primals_tree_def |> In.t_of_tree)
+          ~tangents:(Value_tree.unflatten tangents ~def:primals_tree_def |> In.t_of_tree)
+      in
+      let out_primal_tree = Out.tree_of_t out_primal in
+      let out_tree_def = Value_tree.to_def out_primal_tree in
+      let out_tangent_tree = Out.tree_of_t out_tangent in
+      ( List.append
+          (Value_tree.flatten out_primal_tree)
+          (Value_tree.flatten out_tangent_tree)
+      , out_tree_def ))
+  in
+  let outputs = List.take outputs primals_length in
+  let output =
+    List.filter_map outputs ~f:(function
+      | Partial_value.Known value -> Some value
+      | Unknown _ ->
+        raise_s
+          [%message
+            "unexpected unknown primal" (outputs : Partial_value.t list) (expr : Expr.t)])
+    |> Value_tree.unflatten ~def:expr.out_tree_def
+    |> Out.t_of_tree
+  in
+  let f_vjp (cotangents : out) =
+    eval_expr_transposed
+      expr
+      tangent_vars
+      ~cotangents:(Out.tree_of_t cotangents |> Value_tree.flatten)
+    |> Value_tree.unflatten ~def:primals_tree_def
+    |> In.t_of_tree
+  in
+  output, f_vjp
+;;
+
+let vjp' ~f ~primal = vjp (module Value) (module Value) ~f ~primals:primal
+
+let grad
+      (type in_)
+      (module In : Treeable_intf.S with type t = in_)
+      ~(f : in_ -> Value.t)
+      ~x
+  =
+  let _y, f_vjp = vjp (module In) (module Value) ~f ~primals:x in
+  f_vjp (Value.of_float 1.)
+;;
+
+let grad' ~f ~x = grad (module Value) ~f ~x
+
+let%expect_test "grad" =
+  let y, f_vjp =
+    Eval.handle ~f:(fun () -> vjp' ~f:Value.sin ~primal:(Value.of_float 3.))
+  in
+  let y' = Eval.handle ~f:(fun () -> f_vjp (Value.of_float 1.)) in
+  print_s [%message "" (y : Value.t) (y' : Value.t)];
+  [%expect
+    {| ((y (Tensor 0.14112000805986721)) (y' (Tensor -0.98999249660044542))) |}];
+  Eval.handle ~f:(fun () ->
+    grad'
+      ~f:(fun x ->
+        let y = Value.O.(Value.sin x * Value.of_float 2.) in
+        Value.O.(-y + x))
+      ~x:(Value.of_float 3.))
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  [%expect
+    {| (Tensor 2.9799849932008908) |}]
+;;
