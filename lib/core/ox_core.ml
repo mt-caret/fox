@@ -120,6 +120,17 @@ module Jvp = struct
             t
             ~primal:(Value.cos a.primal)
             ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
+        | Matmul (a, b) ->
+          dual_number
+            t
+            ~primal:(Value.matmul a.primal b.primal)
+            ~tangent:
+              Value.O.(Value.matmul a.tangent b.primal + Value.matmul a.primal b.tangent)
+        | Transpose a ->
+          dual_number
+            t
+            ~primal:(Value.transpose a.primal)
+            ~tangent:(Value.transpose a.tangent)
       in
       continue k (Dual_number.to_value result)
   ;;
@@ -247,6 +258,17 @@ let infer_dims (op : int list option Op.t) =
     Some a
   | Add (a, b) | Sub (a, b) | Mul (a, b) -> Option.first_some a b
   | Neg a | Sin a | Cos a -> a
+  | Matmul (Some a, Some b) ->
+    (match a, b with
+     | [ n; m ], [ m'; k ] ->
+       [%test_eq: int] m m';
+       Some [ n; k ]
+     | _ -> raise_s [%message "Invalid matmul dimensions" (a : int list) (b : int list)])
+  | Matmul (_, _) -> None
+  | Transpose a ->
+    Option.map a ~f:(function
+      | [ n; k ] -> [ k; n ]
+      | a -> raise_s [%message "Invalid transpose dimensions" (a : int list)])
 ;;
 
 module Staging = struct
@@ -488,7 +510,10 @@ module Partial = struct
         | Neg (Known a) -> Known Value.O.(-a)
         | Sin (Known a) -> Known (Value.sin a)
         | Cos (Known a) -> Known (Value.cos a)
-        | (Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _) as op ->
+        | Matmul (Known a, Known b) -> Known (Value.matmul a b)
+        | Transpose (Known a) -> Known (Value.transpose a)
+        | (Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ | Matmul _ | Transpose _) as op
+          ->
           let binder = fresh_var t in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
@@ -539,13 +564,7 @@ let%expect_test "partially_apply_expr_flat" =
   let partial_values, expr =
     Eval.handle ~f:(fun () ->
       partially_apply_expr_flat
-        [ Known (Value.of_float 2.)
-        ; Unknown
-            { var = Var "x"
-            ; (* TODO: does this work when None? *)
-              dims = Some []
-            }
-        ]
+        [ Known (Value.of_float 2.); Unknown { var = Var "x"; dims = None } ]
         ~f:(function
           | [ x; y ] ->
             let x2 = Value.O.(x * x) in
@@ -754,7 +773,13 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Sin (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.cos cotangent)
         | Cos (Var { var; dims = _ }) ->
           accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
-        | Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ ->
+        | Matmul (Var { var; dims = _ }, Value v) ->
+          accum_gradient ~ct_env var (Value.matmul cotangent (Value.transpose v))
+        | Matmul (Value v, Var { var; dims = _ }) ->
+          accum_gradient ~ct_env var (Value.matmul (Value.transpose v) cotangent)
+        | Transpose (Var { var; dims = _ }) ->
+          accum_gradient ~ct_env var (Value.transpose cotangent)
+        | Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ | Matmul _ | Transpose _ ->
           raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
       in
       ct_env)

@@ -30,6 +30,8 @@ let mul a b = Effect.perform (Ox_effect.Op (Mul (a, b)))
 let neg a = Effect.perform (Ox_effect.Op (Neg a))
 let sin a = Effect.perform (Ox_effect.Op (Sin a))
 let cos a = Effect.perform (Ox_effect.Op (Cos a))
+let matmul a b = Effect.perform (Ox_effect.Op (Matmul (a, b)))
+let transpose a = Effect.perform (Ox_effect.Op (Transpose a))
 
 module O = struct
   let ( + ) = add

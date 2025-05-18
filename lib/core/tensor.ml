@@ -70,6 +70,34 @@ let%expect_test "of_float" =
   [%expect {| 5 |}]
 ;;
 
+let of_list l =
+  let t = create_uninitialized [| List.length l |] in
+  List.iteri l ~f:(fun i x -> set t [| i |] x);
+  t
+;;
+
+let%expect_test "of_list" =
+  let t = of_list [ 1.; 2.; 3. ] in
+  [%sexp_of: t] t |> print_s;
+  [%expect {| (1 2 3) |}]
+;;
+
+let of_list2_exn l =
+  match List.map ~f:List.length l |> List.dedup_and_sort ~compare:Int.compare with
+  | [ row_length ] ->
+    let t = create_uninitialized [| List.length l; row_length |] in
+    List.iteri l ~f:(fun i row -> List.iteri row ~f:(fun j x -> set t [| i; j |] x));
+    t
+  | row_lengths ->
+    raise_s [%message "of_list2_exn: non-rectangular list" (row_lengths : int list)]
+;;
+
+let%expect_test "of_list2_exn" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  [%sexp_of: t] t |> print_s;
+  [%expect {| ((1 2) (3 4)) |}]
+;;
+
 let create ~dims value =
   let t = create_uninitialized dims in
   fill t value;
@@ -130,6 +158,54 @@ let mul t1 t2 = map2 t1 t2 ~f:( *. )
 let neg t = map t ~f:( ~-. )
 let sin t = map t ~f:Float.sin
 let cos t = map t ~f:Float.cos
+
+(* TODO: support more than just 2D tensors for matmuls and transposes *)
+let matmul t1 t2 =
+  match dims t1, dims t2 with
+  | [| n; m |], [| m'; k |] ->
+    [%test_eq: int] m m';
+    let t = create_uninitialized [| n; k |] in
+    for i = 0 to n - 1 do
+      for j = 0 to k - 1 do
+        let acc = ref 0. in
+        for l = 0 to m - 1 do
+          acc := !acc +. (get t1 [| i; l |] *. get t2 [| l; j |])
+        done;
+        set t [| i; j |] !acc
+      done
+    done;
+    t
+  | t1_dims, t2_dims ->
+    raise_s
+      [%message
+        "matmul: unsupported dimensions" (t1_dims : int array) (t2_dims : int array)]
+;;
+
+let%expect_test "matmul" =
+  let t1 = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  let t2 = of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] in
+  matmul t1 t2 |> sexp_of_t |> print_s;
+  [%expect {| ((19 22) (43 50)) |}]
+;;
+
+let transpose t =
+  match dims t with
+  | [| n; m |] ->
+    let t' = create_uninitialized [| m; n |] in
+    for i = 0 to m - 1 do
+      for j = 0 to n - 1 do
+        set t' [| j; i |] (get t [| i; j |])
+      done
+    done;
+    t'
+  | dims -> raise_s [%message "transpose: unsupported dimensions" (dims : int array)]
+;;
+
+let%expect_test "transpose" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  transpose t |> sexp_of_t |> print_s;
+  [%expect {| ((1 3) (2 4)) |}]
+;;
 
 module O = struct
   let ( + ) = add

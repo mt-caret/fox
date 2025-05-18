@@ -13,6 +13,12 @@ val set : t -> int array -> float -> unit
 val fill : t -> float -> unit
 val reshape : t -> dims:int array -> t
 val of_float : float -> t
+val of_list : float list -> t
+
+(** [of_list2_exn l] creates a tensor from a list of rows. Raises if a
+    non-rectangular list of lists are provided. *)
+val of_list2_exn : float list list -> t
+
 val create : dims:int array -> float -> t
 val zeros : dims:int array -> t
 val ones : dims:int array -> t

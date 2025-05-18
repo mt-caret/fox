@@ -9,6 +9,8 @@ module type S = sig
   val neg : t -> t
   val sin : t -> t
   val cos : t -> t
+  val matmul : t -> t -> t
+  val transpose : t -> t
 
   module O : sig
     val ( + ) : t -> t -> t

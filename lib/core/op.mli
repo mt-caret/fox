@@ -7,6 +7,8 @@ type 'value t =
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
+  | Matmul of 'value * 'value
+  | Transpose of 'value
 [@@deriving sexp_of]
 
 val map : 'a t -> f:('a -> 'b) -> 'b t

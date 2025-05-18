@@ -7,6 +7,8 @@ type 'value t =
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
+  | Matmul of 'value * 'value
+  | Transpose of 'value
 [@@deriving sexp_of]
 
 let map t ~f =
@@ -17,6 +19,8 @@ let map t ~f =
   | Neg a -> Neg (f a)
   | Sin a -> Sin (f a)
   | Cos a -> Cos (f a)
+  | Matmul (a, b) -> Matmul (f a, f b)
+  | Transpose a -> Transpose (f a)
 ;;
 
 let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
@@ -27,6 +31,8 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   | Neg a -> M.neg a
   | Sin a -> M.sin a
   | Cos a -> M.cos a
+  | Matmul (a, b) -> M.matmul a b
+  | Transpose a -> M.transpose a
 ;;
 
 (* TODO: this can be written in terms of [eval]. *)
@@ -38,4 +44,6 @@ let to_string t ~f =
   | Neg a -> [%string "neg %{f a}"]
   | Sin a -> [%string "sin %{f a}"]
   | Cos a -> [%string "cos %{f a}"]
+  | Matmul (a, b) -> [%string "matmul %{f a} %{f b}"]
+  | Transpose a -> [%string "transpose %{f a}"]
 ;;

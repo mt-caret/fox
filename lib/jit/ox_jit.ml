@@ -17,7 +17,7 @@ let xla_subcomp
   let env = List.zip_exn parameters arguments |> Expr.Var.Map.of_alist_exn in
   let read_atom (atom : Expr.Atom.t) ~env =
     match atom with
-    | Var var -> Map.find_exn env var
+    | Var { var; dims = _ } -> Map.find_exn env var
     | Value value ->
       Value.to_tensor_exn value |> tensor_to_xla_literal |> Xla.Op.constant ~builder
   in
@@ -31,6 +31,10 @@ let xla_subcomp
         | Neg a -> Xla.Op.neg a
         | Sin a -> Xla.Op.sin a
         | Cos a -> Xla.Op.cos a
+        | Matmul (a, b) -> Xla.Op.matmul a b
+        | Transpose a ->
+          (* TODO: support arbitrary dimensions *)
+          Xla.Op.transpose a ~dim_indexes:[| 1; 0 |]
       in
       Map.add_exn env ~key:var ~data:xla_op)
   in
@@ -39,12 +43,13 @@ let xla_subcomp
   |> Xla.Op.tuple ~builder
 ;;
 
-let xla_callable (expr : Expr.t) =
+let xla_callable (expr : Expr.t) ~parameter_dims =
   let xla_builder = Xla.Builder.create ~name:"xla_call" in
   let xla_params =
-    List.mapi expr.parameters ~f:(fun i (Var name) ->
+    List.zip_exn expr.parameters parameter_dims
+    |> List.mapi ~f:(fun i (Var name, dims) ->
       (* TODO: right now we assume all parameters are single-element tensors. *)
-      Xla.Op.parameter name ~id:i ~ty:F64 ~dims:[||] ~builder:xla_builder)
+      Xla.Op.parameter name ~id:i ~ty:F64 ~dims ~builder:xla_builder)
   in
   let out = xla_subcomp expr xla_params ~builder:xla_builder in
   let xla_client = Xla.Client.cpu () in
@@ -81,12 +86,16 @@ let jit
   =
   let input_tree = In.tree_of_t input in
   let input_tree_def = Value_tree.to_def input_tree in
+  let flattened_input_tensors =
+    Value_tree.flatten input_tree |> List.map ~f:Value.to_tensor_exn
+  in
   let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
-  let xla_callable = xla_callable expr |> Staged.unstage in
+  let xla_callable =
+    xla_callable expr ~parameter_dims:(List.map flattened_input_tensors ~f:Tensor.dims)
+    |> Staged.unstage
+  in
   let output =
-    Value_tree.flatten input_tree
-    |> List.map ~f:Value.to_tensor_exn
-    |> xla_callable
+    xla_callable flattened_input_tensors
     |> Nonempty_list.to_list
     |> List.map ~f:Value.of_tensor
   in
@@ -116,4 +125,24 @@ let%expect_test "jit'" =
   |> print_s;
   print [%expect.output];
   [%expect {| (Tensor -0.90019762973551742) |}]
+;;
+
+let%expect_test "jit and matmul" =
+  let print output =
+    String.split_lines output
+    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
+    |> String.concat
+    |> print_endline
+  in
+  let a = Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] |> Value.of_tensor in
+  let b = Tensor.of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] |> Value.of_tensor in
+  jit
+    (module Treeable.Tuple2 (Value) (Value))
+    (module Value)
+    ~f:(fun (a, b) -> Value.matmul a b)
+    (a, b)
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  print [%expect.output];
+  [%expect {| (Tensor ((19 22) (43 50)) (dims (2 2))) |}]
 ;;
