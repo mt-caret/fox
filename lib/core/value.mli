@@ -10,3 +10,9 @@ val to_float_exn : t -> float
 
 include Treeable.S with type t := t
 include Operators_intf.S with type t := t
+
+module Tuple2 : sig
+  include Treeable.S with type t = t * t
+
+  val tree_def : Value_tree.Def.t
+end

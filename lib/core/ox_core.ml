@@ -307,6 +307,23 @@ let%expect_test "build_expr2" =
     |}]
 ;;
 
+let eval_expr_flat (expr : Expr.t) (input : Value.t list) =
+  let eval_atom (atom : Expr.Atom.t) ~env =
+    match atom with
+    | Var var -> Map.find_exn env var
+    | Value value -> value
+  in
+  let env =
+    List.fold
+      expr.equations
+      ~init:(List.zip_exn expr.parameters input |> Expr.Var.Map.of_alist_exn)
+      ~f:(fun env eq ->
+        let result = Op.map eq.op ~f:(eval_atom ~env) |> Op.eval (module Value) in
+        Map.add_exn env ~key:eq.var ~data:result)
+  in
+  Nonempty_list.map expr.return_vals ~f:(eval_atom ~env) |> Nonempty_list.to_list
+;;
+
 let eval_expr
       (type in_ out)
       (module In : Treeable_intf.S with type t = in_)
@@ -315,24 +332,11 @@ let eval_expr
       (input : in_)
   : out
   =
-  let values = In.tree_of_t input |> Value_tree.flatten in
-  let output =
-    let eval_atom (atom : Expr.Atom.t) ~env =
-      match atom with
-      | Var var -> Map.find_exn env var
-      | Value value -> value
-    in
-    let env =
-      List.fold
-        expr.equations
-        ~init:(List.zip_exn expr.parameters values |> Expr.Var.Map.of_alist_exn)
-        ~f:(fun env eq ->
-          let result = Op.map eq.op ~f:(eval_atom ~env) |> Op.eval (module Value) in
-          Map.add_exn env ~key:eq.var ~data:result)
-    in
-    Nonempty_list.map expr.return_vals ~f:(eval_atom ~env) |> Nonempty_list.to_list
-  in
-  Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree
+  In.tree_of_t input
+  |> Value_tree.flatten
+  |> eval_expr_flat expr
+  |> Value_tree.unflatten ~def:expr.out_tree_def
+  |> Out.t_of_tree
 ;;
 
 let eval_expr' = eval_expr (module Value) (module Value)
@@ -404,5 +408,259 @@ let%expect_test "nth_order_derivative build_expr" =
     v_17 = add v_16 v_15
     v_18 = mul v_0 v_4
     in ( v_13 )
+    |}]
+;;
+
+module Partial_value = struct
+  type t =
+    | Known of Value.t
+    | Unknown of Expr.Var.t
+  [@@deriving sexp_of]
+
+  let to_atom : t -> Expr.Atom.t = function
+    | Known value -> Expr.Atom.of_value value
+    | Unknown var -> Var var
+  ;;
+
+  let type_id = Type_equal.Id.create ~name:"Partial_value" [%sexp_of: t]
+end
+
+module Partial = struct
+  type t =
+    { mutable equations : Expr.Eq.t list
+    ; mutable name_counter : int
+    }
+
+  let create () = { equations = []; name_counter = 0 }
+
+  let fresh_var t : Expr.Var.t =
+    let name = [%string "v_%{t.name_counter#Int}"] in
+    t.name_counter <- t.name_counter + 1;
+    Var name
+  ;;
+
+  let lift (T (x, id) as value : Value.t) : Partial_value.t =
+    match Type_equal.Id.same_witness id Partial_value.type_id with
+    | Some T -> x
+    | None -> Known value
+  ;;
+
+  let handle t ~f =
+    try f () with
+    | effect Ox_effect.Op op, k ->
+      let result : Partial_value.t =
+        match Op.map op ~f:lift with
+        | Add (Known a, Known b) -> Known Value.O.(a + b)
+        | Sub (Known a, Known b) -> Known Value.O.(a - b)
+        | Mul (Known a, Known b) -> Known Value.O.(a * b)
+        | Neg (Known a) -> Known Value.O.(-a)
+        | Sin (Known a) -> Known (Value.sin a)
+        | Cos (Known a) -> Known (Value.cos a)
+        | (Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _) as op ->
+          let binder = fresh_var t in
+          t.equations
+          <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
+          Unknown binder
+      in
+      continue k (T (result, Partial_value.type_id))
+  ;;
+end
+
+(** Do we need the const argument to prevent constants from being instantiated many many times?
+
+    arguably we could just have an eq in the jaxpr for the constant
+*)
+let partially_apply_expr_flat
+      (inputs : Partial_value.t list)
+      ~(f : Value.t list -> Value.t list * Value_tree.Def.t)
+  : Partial_value.t list * Expr.t
+  =
+  let partial = Partial.create () in
+  let outputs, out_tree_def =
+    Partial.handle partial ~f:(fun () ->
+      List.map inputs ~f:(fun input -> Value.T (input, Partial_value.type_id)) |> f)
+  in
+  let outputs = List.map outputs ~f:Partial.lift in
+  let only_unknowns =
+    List.filter_map ~f:(function
+      | Partial_value.Known _ -> None
+      | Unknown var -> Some var)
+  in
+  ( outputs
+  , { parameters = only_unknowns inputs
+    ; equations = List.rev partial.equations
+    ; return_vals =
+        only_unknowns outputs
+        |> List.map ~f:(fun var -> Expr.Atom.Var var)
+        |> Nonempty_list.of_list_exn
+    ; out_tree_def
+    } )
+;;
+
+let%expect_test "partially_apply_expr_flat" =
+  let partial_values, expr =
+    Eval.handle ~f:(fun () ->
+      partially_apply_expr_flat
+        [ Known (Value.of_float 2.); Unknown (Var "x") ]
+        ~f:(function
+          | [ x; y ] ->
+            let x2 = Value.O.(x * x) in
+            ( [ x2; Value.O.((x2 * y) + Value.of_float 3.); x; Value.O.((y * y) + x2) ]
+            , Value.tree_def )
+          | _ -> assert false))
+  in
+  print_s ([%sexp_of: Partial_value.t list] partial_values);
+  [%expect
+    {|
+    ((Known (Tensor 4)) (Unknown (Var v_3)) (Known (Tensor 2))
+     (Unknown (Var v_1)))
+    |}];
+  Expr.to_string_hum expr |> print_endline;
+  [%expect
+    {|
+    x ->
+    v_0 = mul x x
+    v_1 = add v_0 (Tensor 4)
+    v_2 = mul (Tensor 4) x
+    v_3 = add v_2 (Tensor 3)
+    in ( v_3, v_1 )
+    |}]
+;;
+
+let linearize
+      (type in_ out)
+      (module In : Treeable_intf.S with type t = in_)
+      (module Out : Treeable_intf.S with type t = out)
+      ~(f : in_ -> out)
+      ~(primals : in_)
+  =
+  let primals_tree = In.tree_of_t primals in
+  let primals_tree_def = Value_tree.to_def primals_tree in
+  let primals =
+    Value_tree.flatten primals_tree
+    |> List.map ~f:(fun value -> Partial_value.Known value)
+  in
+  let primals_length = List.length primals in
+  let inputs =
+    List.append
+      primals
+      (List.init primals_length ~f:(fun i ->
+         Partial_value.Unknown (Var [%string "a_%{i#Int}"])))
+  in
+  let outputs, expr =
+    partially_apply_expr_flat inputs ~f:(fun inputs ->
+      let primals, tangents = List.split_n inputs primals_length in
+      let out_primal, out_tangent =
+        jvp
+          (module In)
+          (module Out)
+          ~f
+          ~primals:(Value_tree.unflatten primals ~def:primals_tree_def |> In.t_of_tree)
+          ~tangents:(Value_tree.unflatten tangents ~def:primals_tree_def |> In.t_of_tree)
+      in
+      let out_primal_tree = Out.tree_of_t out_primal in
+      let out_tree_def = Value_tree.to_def out_primal_tree in
+      let out_tangent_tree = Out.tree_of_t out_tangent in
+      ( List.append
+          (Value_tree.flatten out_primal_tree)
+          (Value_tree.flatten out_tangent_tree)
+      , out_tree_def ))
+  in
+  let outputs = List.take outputs primals_length in
+  let output =
+    List.filter_map outputs ~f:(function
+      | Partial_value.Known value -> Some value
+      | Unknown _ ->
+        raise_s
+          [%message
+            "unexpected unknown primal" (outputs : Partial_value.t list) (expr : Expr.t)])
+    |> Value_tree.unflatten ~def:expr.out_tree_def
+    |> Out.t_of_tree
+  in
+  let f_lin (tangents : in_) =
+    In.tree_of_t tangents
+    |> Value_tree.flatten
+    |> eval_expr_flat expr
+    |> Value_tree.unflatten ~def:expr.out_tree_def
+    |> Out.t_of_tree
+  in
+  output, f_lin
+;;
+
+let linearize' ~f ~primals = linearize (module Value) (module Value) ~f ~primals
+
+let%expect_test "linearize" =
+  let y, f_lin =
+    Eval.handle ~f:(fun () -> linearize' ~f:Value.sin ~primals:(Value.of_float 3.))
+  in
+  print_s [%message "" (y : Value.t) (Float.sin 3. : float)];
+  [%expect {| ((y (Tensor 0.14112000805986721)) ("Float.sin 3." 0.14112000805986721)) |}];
+  let y' = Eval.handle ~f:(fun () -> f_lin (Value.of_float 1.)) in
+  print_s [%message "" (y' : Value.t) (Float.cos 3. : float)];
+  [%expect
+    {| ((y' (Tensor -0.98999249660044542)) ("Float.cos 3." -0.98999249660044542)) |}];
+  let y, f_lin =
+    Eval.handle ~f:(fun () ->
+      linearize'
+        ~f:(fun x ->
+          let y = Value.O.(Value.sin x * Value.of_float 2.) in
+          Value.O.(-y + x))
+        ~primals:(Value.of_float 3.))
+  in
+  let y' = Eval.handle ~f:(fun () -> f_lin (Value.of_float 1.)) in
+  print_s [%message "" (y : Value.t) (y' : Value.t)];
+  [%expect {| ((y (Tensor 2.7177599838802657)) (y' (Tensor 2.9799849932008908))) |}];
+  let f a =
+    let b = Value.sin a in
+    let c = Value.neg b in
+    c
+  in
+  build_expr' ~f |> Expr.to_string_hum |> print_endline;
+  [%expect
+    {|
+    v_0 ->
+    v_1 = sin v_0
+    v_2 = neg v_1
+    in ( v_2 )
+    |}];
+  build_expr
+    (module Value.Tuple2)
+    (module Value.Tuple2)
+    ~f:(fun (a, b) -> jvp' ~f ~primal:a ~tangent:b)
+    ~in_tree_def:Value.Tuple2.tree_def
+  |> Expr.to_string_hum
+  |> print_endline;
+  [%expect
+    {|
+    v_1 v_0 ->
+    v_2 = cos v_1
+    v_3 = mul v_2 v_0
+    v_4 = sin v_1
+    v_5 = neg v_3
+    v_6 = neg v_4
+    in ( v_6, v_5 )
+    |}];
+  (* TODO: fix consts? *)
+  build_expr' ~f:(fun x ->
+    let y, _f_lin = linearize' ~f ~primals:x in
+    y)
+  |> Expr.to_string_hum
+  |> print_endline;
+  [%expect
+    {|
+    v_0 ->
+    v_1 = cos v_0
+    v_2 = sin v_0
+    v_3 = neg v_2
+    in ( v_3 )
+    |}];
+  let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
+  build_expr' ~f:f_lin |> Expr.to_string_hum |> print_endline;
+  [%expect
+    {|
+    v_0 ->
+    v_1 = mul (Tensor 1) v_0
+    v_2 = neg v_1
+    in ( v_2 )
     |}]
 ;;
