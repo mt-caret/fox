@@ -1,8 +1,8 @@
 # Fox - Functional OCaml + XLA
 
 Fox is an OCaml library for automatic differentiation and numerical computing,
-based on Jax. It provides a flexible and efficient framework for computing
-derivatives and performing numerical operations on tensors.
+inspired heavily by Jax. It provides a flexible framework for automatically
+differentiating and XLA-jit-compiling tensor-based computations.
 
 Please note that this library is still under active development and lacks
 many features.
