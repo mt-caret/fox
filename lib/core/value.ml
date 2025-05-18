@@ -10,11 +10,15 @@ end
 
 include T
 
-let of_tensor t = T (t, Tensor.type_id)
+let dims (T { value = _; type_id = _; dims }) = dims
 
-let to_tensor_exn (T (x, id) as t) : Tensor.t =
-  match Type_equal.Id.same_witness id Tensor.type_id with
-  | Some T -> x
+let of_tensor value =
+  T { value; type_id = Tensor.type_id; dims = Some (Tensor.dims value |> Array.to_list) }
+;;
+
+let to_tensor_exn (T { value; type_id; dims = _ } as t) : Tensor.t =
+  match Type_equal.Id.same_witness type_id Tensor.type_id with
+  | Some T -> value
   | None -> raise_s [%message "Invalid value" (t : t)]
 ;;
 

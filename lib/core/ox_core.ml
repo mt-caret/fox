@@ -59,22 +59,34 @@ module Dual_number = struct
   [@@deriving sexp_of, fields ~getters]
 
   let type_id = Type_equal.Id.create ~name:"Dual_number" [%sexp_of: t]
-  let to_value t : Value.t = T (t, type_id)
+  let to_value t : Value.t = T { value = t; type_id; dims = Value.dims t.primal }
 end
 
 module Jvp = struct
   type t = { id : Id.t }
 
   let create () = { id = Id.create () }
-  let dual_number t ~primal ~tangent : Dual_number.t = { primal; tangent; id = t.id }
 
-  let lift t (T (x, id) as value : Value.t) : Dual_number.t =
-    match Type_equal.Id.same_witness id Dual_number.type_id with
+  let dual_number t ~primal ~tangent : Dual_number.t =
+    (match Value.dims primal, Value.dims tangent with
+     | Some primal_dims, Some tangent_dims ->
+       [%test_eq: int list] primal_dims tangent_dims
+     | _ -> ());
+    { primal; tangent; id = t.id }
+  ;;
+
+  let lift t (T { value = x; type_id; dims } as value : Value.t) : Dual_number.t =
+    let zeros () =
+      match dims with
+      | None ->
+        (* TOOD: Unsure if this is correct *)
+        Value.of_float 0.
+      | Some dims -> Value.of_tensor (Tensor.create ~dims:(Array.of_list dims) 0.)
+    in
+    match Type_equal.Id.same_witness type_id Dual_number.type_id with
     | Some T ->
-      if Id.equal t.id x.id
-      then x
-      else dual_number t ~primal:value ~tangent:(Value.of_float 0.)
-    | None -> dual_number t ~primal:value ~tangent:(Value.of_float 0.)
+      if Id.equal t.id x.id then x else dual_number t ~primal:value ~tangent:(zeros ())
+    | None -> dual_number t ~primal:value ~tangent:(zeros ())
   ;;
 
   let handle t ~f =
@@ -228,6 +240,15 @@ let%expect_test "pertubation confusion avoidance" =
   [%expect {| (Tensor 0) |}]
 ;;
 
+let infer_dims (op : int list option Op.t) =
+  match op with
+  | Add (Some a, Some b) | Sub (Some a, Some b) | Mul (Some a, Some b) ->
+    [%test_eq: int list] a b;
+    Some a
+  | Add (a, b) | Sub (a, b) | Mul (a, b) -> Option.first_some a b
+  | Neg a | Sin a | Cos a -> a
+;;
+
 module Staging = struct
   type t =
     { mutable equations : Expr.Eq.t list
@@ -247,7 +268,8 @@ module Staging = struct
     | effect Ox_effect.Op op, k ->
       let binder = fresh_var t in
       t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
-      continue k (T (binder, Expr.Var.type_id))
+      let dims = Op.map op ~f:Value.dims |> infer_dims in
+      continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
   ;;
 end
 
@@ -270,7 +292,9 @@ let build_expr
   let f = Staged.unstage f in
   let result =
     Staging.handle staging ~f:(fun () ->
-      List.map parameters ~f:(fun parameter -> Value.T (parameter, Expr.Var.type_id)) |> f)
+      List.map parameters ~f:(fun parameter ->
+        Value.T { value = parameter; type_id = Expr.Var.type_id; dims = None })
+      |> f)
   in
   { parameters
   ; equations = List.rev staging.equations
@@ -310,7 +334,7 @@ let%expect_test "build_expr2" =
 let eval_expr_flat (expr : Expr.t) (input : Value.t list) =
   let eval_atom (atom : Expr.Atom.t) ~env =
     match atom with
-    | Var var -> Map.find_exn env var
+    | Var { var; dims = _ } -> Map.find_exn env var
     | Value value -> value
   in
   let env =
@@ -414,12 +438,20 @@ let%expect_test "nth_order_derivative build_expr" =
 module Partial_value = struct
   type t =
     | Known of Value.t
-    | Unknown of Expr.Var.t
+    | Unknown of
+        { var : Expr.Var.t
+        ; dims : int list option
+        }
   [@@deriving sexp_of]
+
+  let dims = function
+    | Known value -> Value.dims value
+    | Unknown { var = _; dims } -> dims
+  ;;
 
   let to_atom : t -> Expr.Atom.t = function
     | Known value -> Expr.Atom.of_value value
-    | Unknown var -> Var var
+    | Unknown { var; dims } -> Var { var; dims }
   ;;
 
   let type_id = Type_equal.Id.create ~name:"Partial_value" [%sexp_of: t]
@@ -439,8 +471,8 @@ module Partial = struct
     Var name
   ;;
 
-  let lift (T (x, id) as value : Value.t) : Partial_value.t =
-    match Type_equal.Id.same_witness id Partial_value.type_id with
+  let lift (T { value = x; type_id; dims = _ } as value : Value.t) : Partial_value.t =
+    match Type_equal.Id.same_witness type_id Partial_value.type_id with
     | Some T -> x
     | None -> Known value
   ;;
@@ -460,9 +492,9 @@ module Partial = struct
           let binder = fresh_var t in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
-          Unknown binder
+          Unknown { var = binder; dims = infer_dims (Op.map op ~f:Partial_value.dims) }
       in
-      continue k (T (result, Partial_value.type_id))
+      continue k (T { value = result; type_id = Partial_value.type_id; dims = None })
   ;;
 end
 
@@ -478,20 +510,26 @@ let partially_apply_expr_flat
   let partial = Partial.create () in
   let outputs, out_tree_def =
     Partial.handle partial ~f:(fun () ->
-      List.map inputs ~f:(fun input -> Value.T (input, Partial_value.type_id)) |> f)
+      List.map inputs ~f:(fun input ->
+        Value.T
+          { value = input
+          ; type_id = Partial_value.type_id
+          ; dims = Partial_value.dims input
+          })
+      |> f)
   in
   let outputs = List.map outputs ~f:Partial.lift in
   let only_unknowns =
     List.filter_map ~f:(function
       | Partial_value.Known _ -> None
-      | Unknown var -> Some var)
+      | Unknown { var; dims } -> Some (var, dims))
   in
   ( outputs
-  , { parameters = only_unknowns inputs
+  , { parameters = only_unknowns inputs |> List.map ~f:fst
     ; equations = List.rev partial.equations
     ; return_vals =
         only_unknowns outputs
-        |> List.map ~f:(fun var -> Expr.Atom.Var var)
+        |> List.map ~f:(fun (var, dims) -> Expr.Atom.Var { var; dims })
         |> Nonempty_list.of_list_exn
     ; out_tree_def
     } )
@@ -501,7 +539,13 @@ let%expect_test "partially_apply_expr_flat" =
   let partial_values, expr =
     Eval.handle ~f:(fun () ->
       partially_apply_expr_flat
-        [ Known (Value.of_float 2.); Unknown (Var "x") ]
+        [ Known (Value.of_float 2.)
+        ; Unknown
+            { var = Var "x"
+            ; (* TODO: does this work when None? *)
+              dims = Some []
+            }
+        ]
         ~f:(function
           | [ x; y ] ->
             let x2 = Value.O.(x * x) in
@@ -512,8 +556,8 @@ let%expect_test "partially_apply_expr_flat" =
   print_s ([%sexp_of: Partial_value.t list] partial_values);
   [%expect
     {|
-    ((Known (Tensor 4)) (Unknown (Var v_3)) (Known (Tensor 2))
-     (Unknown (Var v_1)))
+    ((Known (Tensor 4)) (Unknown (var (Var v_3)) (dims (()))) (Known (Tensor 2))
+     (Unknown (var (Var v_1)) (dims (()))))
     |}];
   Expr.to_string_hum expr |> print_endline;
   [%expect
@@ -544,8 +588,9 @@ let linearize
   let inputs =
     List.append
       primals
-      (List.init primals_length ~f:(fun i ->
-         Partial_value.Unknown (Var [%string "a_%{i#Int}"])))
+      (List.mapi primals ~f:(fun i primal ->
+         Partial_value.Unknown
+           { var = Var [%string "a_%{i#Int}"]; dims = Partial_value.dims primal }))
   in
   let outputs, expr =
     partially_apply_expr_flat inputs ~f:(fun inputs ->
@@ -671,11 +716,13 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       | None -> value
       | Some existing -> Value.O.(existing + value))
   in
-  let read_gradient ~ct_env var =
+  let read_gradient ~ct_env var ~dims =
     (* TODO: some sort of type inference / add a new variant for "zero"? *)
     Map.find ct_env var
     |> Option.value_or_thunk ~default:(fun () ->
-      Tensor.zeros ~dims:[||] |> Value.of_tensor)
+      match dims with
+      | None -> raise_s [%message "unexpected unknown dims" (var : Expr.Var.t)]
+      | Some dims -> Tensor.zeros ~dims:(Array.of_list dims) |> Value.of_tensor)
   in
   let ct_env =
     List.zip_exn (Nonempty_list.to_list expr.return_vals) cotangents
@@ -684,32 +731,35 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       | Value _ ->
         (* TODO: do we actually want to just ignore constnats? *)
         raise_s [%message "unexpected const return value" (return_val : Expr.Atom.t)]
-      | Var var -> accum_gradient ~ct_env var cotangent)
+      | Var { var; dims = _ } -> accum_gradient ~ct_env var cotangent)
   in
   let ct_env =
     List.rev expr.equations
     |> List.fold ~init:ct_env ~f:(fun ct_env { var; op } ->
-      let cotangent = read_gradient ~ct_env var in
+      let cotangent_dims = Op.map op ~f:Expr.Atom.dims |> infer_dims in
+      let cotangent = read_gradient ~ct_env var ~dims:cotangent_dims in
       let ct_env =
         match op with
-        | Add (Var var, Value _) | Add (Value _, Var var) ->
+        | Add (Var { var; dims = _ }, Value _) | Add (Value _, Var { var; dims = _ }) ->
           accum_gradient ~ct_env var cotangent
-        | Add (Var v1, Var v2) ->
+        | Add (Var { var = v1; dims = _ }, Var { var = v2; dims = _ }) ->
           let ct_env = accum_gradient ~ct_env v1 cotangent in
           accum_gradient ~ct_env v2 cotangent
-        | Sub (Var var, Value _) -> accum_gradient ~ct_env var cotangent
-        | Sub (Value _, Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
-        | Mul (Var var, Value v) | Mul (Value v, Var var) ->
+        | Sub (Var { var; dims = _ }, Value _) -> accum_gradient ~ct_env var cotangent
+        | Sub (Value _, Var { var; dims = _ }) ->
+          accum_gradient ~ct_env var (Value.neg cotangent)
+        | Mul (Var { var; dims = _ }, Value v) | Mul (Value v, Var { var; dims = _ }) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
-        | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
-        | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
-        | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
+        | Neg (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Sin (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.cos cotangent)
+        | Cos (Var { var; dims = _ }) ->
+          accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
         | Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ ->
           raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
       in
       ct_env)
   in
-  List.map args ~f:(read_gradient ~ct_env)
+  List.map args ~f:(fun (var, dims) -> read_gradient ~ct_env var ~dims)
 ;;
 
 let vjp
@@ -727,10 +777,13 @@ let vjp
   in
   let primals_length = List.length primals in
   let tangent_vars =
-    List.init primals_length ~f:(fun i -> Expr.Var.Var [%string "a_%{i#Int}"])
+    List.mapi primals ~f:(fun i primal ->
+      Expr.Var.Var [%string "a_%{i#Int}"], Partial_value.dims primal)
   in
   let inputs =
-    List.append primals (List.map tangent_vars ~f:(fun var -> Partial_value.Unknown var))
+    List.append
+      primals
+      (List.map tangent_vars ~f:(fun (var, dims) -> Partial_value.Unknown { var; dims }))
   in
   let outputs, expr =
     partially_apply_expr_flat inputs ~f:(fun inputs ->
@@ -793,8 +846,7 @@ let%expect_test "grad" =
   in
   let y' = Eval.handle ~f:(fun () -> f_vjp (Value.of_float 1.)) in
   print_s [%message "" (y : Value.t) (y' : Value.t)];
-  [%expect
-    {| ((y (Tensor 0.14112000805986721)) (y' (Tensor -0.98999249660044542))) |}];
+  [%expect {| ((y (Tensor 0.14112000805986721)) (y' (Tensor -0.98999249660044542))) |}];
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(fun x ->
@@ -803,6 +855,5 @@ let%expect_test "grad" =
       ~x:(Value.of_float 3.))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect
-    {| (Tensor 2.9799849932008908) |}]
+  [%expect {| (Tensor 2.9799849932008908) |}]
 ;;

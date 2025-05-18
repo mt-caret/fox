@@ -14,19 +14,29 @@ end
 
 module Atom = struct
   type t =
-    | Var of Var.t
+    | Var of
+        { var : Var.t
+        ; dims : int list option
+        }
     | Value of Value.t
   [@@deriving sexp_of]
 
   let to_string = function
-    | Var name -> Var.to_string name
+    | Var { var; dims = _ } ->
+      (* TODO: print dims *)
+      Var.to_string var
     | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
   ;;
 
-  let of_value (T (x, id) as value : Value.t) : t =
-    match Type_equal.Id.same_witness id Var.type_id with
-    | Some T -> Var x
+  let of_value (T { value = x; type_id; dims } as value : Value.t) : t =
+    match Type_equal.Id.same_witness type_id Var.type_id with
+    | Some T -> Var { var = x; dims }
     | None -> Value value
+  ;;
+
+  let dims = function
+    | Var { var = _; dims } -> dims
+    | Value value -> Value.dims value
   ;;
 end
 

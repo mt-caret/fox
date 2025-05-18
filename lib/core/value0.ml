@@ -1,8 +1,17 @@
 open! Core
 
-type t = T : 'a * 'a Type_equal.Id.t -> t
+type t =
+  | T :
+      { value : 'a
+      ; type_id : 'a Type_equal.Id.t
+      ; dims : int list option
+      }
+      -> t
 
-let sexp_of_t (T (x, id)) =
-  let x = Type_equal.Id.to_sexp id x in
-  [%message (Type_equal.Id.name id) ~_:(x : Sexp.t)]
+let sexp_of_t (T { value; type_id; dims }) =
+  let x = Type_equal.Id.to_sexp type_id value in
+  match dims with
+  | None -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t) ~dims:"?"]
+  | Some [] -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t)]
+  | Some dims -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t) (dims : int list)]
 ;;
