@@ -30,7 +30,7 @@ let flatten_function
 module Eval = struct
   let handle ~f =
     try f () with
-    | effect Ox_effect.Op op, k ->
+    | effect Fox_effect.Op op, k ->
       let result =
         Op.map op ~f:Value.to_tensor_exn |> Op.eval (module Tensor) |> Value.of_tensor
       in
@@ -91,7 +91,7 @@ module Jvp = struct
 
   let handle t ~f =
     try f () with
-    | effect Ox_effect.Op op, k ->
+    | effect Fox_effect.Op op, k ->
       let result =
         match Op.map op ~f:(lift t) with
         | Add (a, b) ->
@@ -287,7 +287,7 @@ module Staging = struct
 
   let handle t ~f =
     try f () with
-    | effect Ox_effect.Op op, k ->
+    | effect Fox_effect.Op op, k ->
       let binder = fresh_var t in
       t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
       let dims = Op.map op ~f:Value.dims |> infer_dims in
@@ -501,7 +501,7 @@ module Partial = struct
 
   let handle t ~f =
     try f () with
-    | effect Ox_effect.Op op, k ->
+    | effect Fox_effect.Op op, k ->
       let result : Partial_value.t =
         match Op.map op ~f:lift with
         | Add (Known a, Known b) -> Known Value.O.(a + b)

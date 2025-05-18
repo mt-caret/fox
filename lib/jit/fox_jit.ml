@@ -1,5 +1,5 @@
 open! Core
-open! Ox_core
+open! Fox_core
 
 let tensor_of_xla_literal literal =
   Xla.Literal.to_bigarray literal ~kind:Bigarray.float64 |> Tensor.Private.of_bigarray

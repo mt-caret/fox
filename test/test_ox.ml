@@ -1,5 +1,5 @@
 open! Core
-open! Ox_core
+open! Fox_core
 
 let f x =
   let y = Value.O.(Value.sin x * Value.of_float 2.) in

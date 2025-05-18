@@ -1,6 +1,6 @@
 (library
- (name ox_test)
+ (name fox_test)
  (inline_tests)
- (libraries core ox_core)
+ (libraries core fox_core)
  (preprocess
   (pps ppx_jane)))

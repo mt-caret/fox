@@ -24,14 +24,14 @@ let to_tensor_exn (T { value; type_id; dims = _ } as t) : Tensor.t =
 
 let of_float x = of_tensor (Tensor.of_float x)
 let to_float_exn t : float = to_tensor_exn t |> Tensor.item
-let add a b = Effect.perform (Ox_effect.Op (Add (a, b)))
-let sub a b = Effect.perform (Ox_effect.Op (Sub (a, b)))
-let mul a b = Effect.perform (Ox_effect.Op (Mul (a, b)))
-let neg a = Effect.perform (Ox_effect.Op (Neg a))
-let sin a = Effect.perform (Ox_effect.Op (Sin a))
-let cos a = Effect.perform (Ox_effect.Op (Cos a))
-let matmul a b = Effect.perform (Ox_effect.Op (Matmul (a, b)))
-let transpose a = Effect.perform (Ox_effect.Op (Transpose a))
+let add a b = Effect.perform (Fox_effect.Op (Add (a, b)))
+let sub a b = Effect.perform (Fox_effect.Op (Sub (a, b)))
+let mul a b = Effect.perform (Fox_effect.Op (Mul (a, b)))
+let neg a = Effect.perform (Fox_effect.Op (Neg a))
+let sin a = Effect.perform (Fox_effect.Op (Sin a))
+let cos a = Effect.perform (Fox_effect.Op (Cos a))
+let matmul a b = Effect.perform (Fox_effect.Op (Matmul (a, b)))
+let transpose a = Effect.perform (Fox_effect.Op (Transpose a))
 
 module O = struct
   let ( + ) = add

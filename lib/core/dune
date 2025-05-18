@@ -1,5 +1,5 @@
 (library
- (name ox_core)
+ (name fox_core)
  (inline_tests)
  (libraries core core_kernel.nonempty_list ppx_typed_fields.typed_fields_lib)
  (preprocess
