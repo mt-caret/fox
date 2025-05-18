@@ -32,3 +32,4 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
 - [ ] Add JIT caching story
 - [ ] Pytorch backend
 - [ ] Testing framework for diffing op backends (XLA, Pytorch, OCaml)
+- [ ] Shape inference?
