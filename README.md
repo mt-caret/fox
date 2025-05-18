@@ -14,20 +14,7 @@ many features.
 - **JIT Compilation**: Just-in-time compilation to XLA
 - **Tree-based Value Representation**: Efficient handling of complex data structures through tree-based representations
 
-## Usage Example
-
-```ocaml
-open Ox
-
-(* Define a function *)
-let f x = Value.O.(x * (x + Value.of_float 3.))
-
-(* Compute the function value *)
-let result = Eval.handle ~f:(fun () -> f (Value.of_float 2.))
-
-(* Compute the derivative *)
-let derivative = derivative ~f ~x:(Value.of_float 2.)
-```
+<!-- TODO: add usage example -->
 
 ## Building
 
