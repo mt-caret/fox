@@ -214,6 +214,12 @@ module O = struct
   let ( ~- ) = neg
 end
 
+module With_shape = struct
+  type nonrec t = t
+
+  let sexp_of_t t = [%sexp { dims : int array = dims t; tensor : t = t }]
+end
+
 module Private = struct
   let to_bigarray = Fn.id
   let of_bigarray = Fn.id

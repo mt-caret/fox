@@ -28,6 +28,10 @@ val map2 : t -> t -> f:(float -> float -> float) -> t
 
 include Operators_intf.S with type t := t
 
+module With_shape : sig
+  type nonrec t = t [@@deriving sexp_of]
+end
+
 module Private : sig
   val to_bigarray
     :  t
