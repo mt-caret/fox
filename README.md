@@ -30,6 +30,7 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
   - [x] 2d matmuls
   - [x] sum
   - [ ] TODO: add more here
+- [ ] Print XLA HLO module
 - [ ] Add JIT caching story
 - [ ] Pytorch backend
 - [ ] Testing framework for diffing op backends (XLA, Pytorch, OCaml)
