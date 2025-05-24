@@ -28,8 +28,12 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
 - [x] Better shape and type story
 - [ ] Basic tensor operations for simple neural network example
   - [x] 2d matmuls
+  - [x] sum
   - [ ] TODO: add more here
 - [ ] Add JIT caching story
 - [ ] Pytorch backend
 - [ ] Testing framework for diffing op backends (XLA, Pytorch, OCaml)
+  - [ ] Quickcheck generators
+  - [ ] Diff XLA backend and OCaml
+  - [ ] Diff OCaml/XLA vjp and Pytorch
 - [ ] Shape inference?
