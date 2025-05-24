@@ -193,3 +193,28 @@ module Make_operators_with_dim_check (M : sig
       ;;
     end)
 end
+
+module Make_operators_with_optional_dim_check (M : sig
+    type value
+
+    val eval : value t -> value
+    val dims : value -> int array option
+  end) : Operators_intf.S with type t := M.value = struct
+  include Make_operators (struct
+      type value = M.value
+
+      let eval =
+        fun t ->
+        let inferred_out_dims = map t ~f:M.dims |> infer_optional_dims in
+        let out = M.eval t in
+        (match inferred_out_dims, M.dims out with
+         | Some inferred_out_dims, Some out_dims ->
+           [%test_result: int array]
+             out_dims
+             ~expect:inferred_out_dims
+             ~message:"[Op.infer_dims] dims mismatch with actual dims"
+         | _, _ -> ());
+        out
+      ;;
+    end)
+end
