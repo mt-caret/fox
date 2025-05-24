@@ -25,3 +25,10 @@ val eval : (module Operators_intf.S with type t = 'a) -> 'a t -> 'a
 val to_string : 'a t -> f:('a -> string) -> string
 val infer_dims : int array t -> int array
 val infer_optional_dims : int array option t -> int array option
+
+module Make_operators_with_dim_check (M : sig
+    type value
+
+    val eval : value t -> value
+    val dims : value -> int array
+  end) : Operators_intf.S with type t := M.value

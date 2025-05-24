@@ -153,61 +153,6 @@ let map2 t1 t2 ~f =
     reshape t ~dims:(dims t1)
 ;;
 
-let add t1 t2 = map2 t1 t2 ~f:( +. )
-let sub t1 t2 = map2 t1 t2 ~f:( -. )
-let mul t1 t2 = map2 t1 t2 ~f:( *. )
-let neg t = map t ~f:( ~-. )
-let sin t = map t ~f:Float.sin
-let cos t = map t ~f:Float.cos
-
-(* TODO: support more than just 2D tensors for matmuls and transposes *)
-let matmul t1 t2 =
-  match dims t1, dims t2 with
-  | [| n; m |], [| m'; k |] ->
-    [%test_eq: int] m m';
-    let t = create_uninitialized [| n; k |] in
-    for i = 0 to n - 1 do
-      for j = 0 to k - 1 do
-        let acc = ref 0. in
-        for l = 0 to m - 1 do
-          acc := !acc +. (get t1 [| i; l |] *. get t2 [| l; j |])
-        done;
-        set t [| i; j |] !acc
-      done
-    done;
-    t
-  | t1_dims, t2_dims ->
-    raise_s
-      [%message
-        "matmul: unsupported dimensions" (t1_dims : int array) (t2_dims : int array)]
-;;
-
-let%expect_test "matmul" =
-  let t1 = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
-  let t2 = of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] in
-  matmul t1 t2 |> sexp_of_t |> print_s;
-  [%expect {| ((19 22) (43 50)) |}]
-;;
-
-let transpose t =
-  match dims t with
-  | [| n; m |] ->
-    let t' = create_uninitialized [| m; n |] in
-    for i = 0 to m - 1 do
-      for j = 0 to n - 1 do
-        set t' [| j; i |] (get t [| i; j |])
-      done
-    done;
-    t'
-  | dims -> raise_s [%message "transpose: unsupported dimensions" (dims : int array)]
-;;
-
-let%expect_test "transpose" =
-  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
-  transpose t |> sexp_of_t |> print_s;
-  [%expect {| ((1 3) (2 4)) |}]
-;;
-
 let sum_single_axis t ~axis ~keep_dim =
   let dims = dims t in
   let dims_length = Array.length dims in
@@ -249,20 +194,86 @@ let%expect_test "sum_single_axis" =
   [%expect {| ((3) (7)) |}]
 ;;
 
-let sum t ~dims:dims_to_sum ~keep_dims =
-  let dims = dims t in
-  let dims_length = Array.length dims in
-  [%test_pred: int array]
-    ~message:"sum: dims out of bounds"
-    (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
-    dims_to_sum;
-  let dims_to_sum =
-    Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
-    |> Array.to_list
-    |> List.sort ~compare:(Comparable.reverse Int.compare)
-  in
-  List.fold dims_to_sum ~init:t ~f:(fun t axis ->
-    sum_single_axis t ~axis ~keep_dim:keep_dims)
+include Op.Make_operators_with_dim_check (struct
+    type value = t
+
+    let eval : t Op.t -> t = function
+      | Add (t1, t2) -> map2 t1 t2 ~f:( +. )
+      | Sub (t1, t2) -> map2 t1 t2 ~f:( -. )
+      | Mul (t1, t2) -> map2 t1 t2 ~f:( *. )
+      | Neg t -> map t ~f:( ~-. )
+      | Sin t -> map t ~f:Float.sin
+      | Cos t -> map t ~f:Float.cos
+      | Matmul (t1, t2) ->
+        (* TODO: support more than just 2D tensors for matmuls and transposes *)
+        (match dims t1, dims t2 with
+         | [| n; m |], [| m'; k |] ->
+           [%test_eq: int] m m';
+           let t = create_uninitialized [| n; k |] in
+           for i = 0 to n - 1 do
+             for j = 0 to k - 1 do
+               let acc = ref 0. in
+               for l = 0 to m - 1 do
+                 acc := !acc +. (get t1 [| i; l |] *. get t2 [| l; j |])
+               done;
+               set t [| i; j |] !acc
+             done
+           done;
+           t
+         | t1_dims, t2_dims ->
+           raise_s
+             [%message
+               "matmul: unsupported dimensions"
+                 (t1_dims : int array)
+                 (t2_dims : int array)])
+      | Transpose t ->
+        (match dims t with
+         | [| n; m |] ->
+           let t' = create_uninitialized [| m; n |] in
+           for i = 0 to m - 1 do
+             for j = 0 to n - 1 do
+               set t' [| j; i |] (get t [| i; j |])
+             done
+           done;
+           t'
+         | dims ->
+           raise_s [%message "transpose: unsupported dimensions" (dims : int array)])
+      | Sum { value = t; dims = dims_to_sum; keep_dims } ->
+        let dims = dims t in
+        let dims_length = Array.length dims in
+        let dims_to_sum =
+          Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
+          |> Array.to_list
+          |> List.sort ~compare:(Comparable.reverse Int.compare)
+        in
+        List.fold dims_to_sum ~init:t ~f:(fun t axis ->
+          sum_single_axis t ~axis ~keep_dim:keep_dims)
+      | Broadcast { value = t; dims = to_dims } ->
+        let from_dims = dims t in
+        let dims_padding_length = Array.length to_dims - Array.length from_dims in
+        init to_dims ~f:(fun index ->
+          let from_index =
+            Array.subo index ~pos:dims_padding_length ~len:(Array.length from_dims)
+            |> Array.map2_exn from_dims ~f:(fun from_dim index_dim ->
+              index_dim % from_dim)
+          in
+          get t from_index)
+    ;;
+
+    let dims = dims
+  end)
+
+let%expect_test "matmul" =
+  let t1 = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  let t2 = of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] in
+  matmul t1 t2 |> sexp_of_t |> print_s;
+  [%expect {| ((19 22) (43 50)) |}]
+;;
+
+let%expect_test "transpose" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  transpose t |> sexp_of_t |> print_s;
+  [%expect {| ((1 3) (2 4)) |}]
 ;;
 
 let%expect_test "sum" =
@@ -271,31 +282,6 @@ let%expect_test "sum" =
   [%expect {| 10 |}];
   sum t ~dims:[| 0; 1 |] ~keep_dims:true |> sexp_of_t |> print_s;
   [%expect {| ((10)) |}]
-;;
-
-let broadcast t ~dims:to_dims =
-  let from_dims = dims t in
-  if Array.length to_dims < Array.length from_dims
-  then
-    raise_s
-      [%message
-        "broadcast: can't broadcast to a larger rank"
-          (from_dims : int array)
-          (to_dims : int array)];
-  let dims_padding_length = Array.length to_dims - Array.length from_dims in
-  let padded_from_dims =
-    Array.append (Array.create ~len:dims_padding_length 1) from_dims
-  in
-  Array.zip_exn padded_from_dims to_dims
-  |> [%test_pred: (int * int) array]
-       ~message:"broadcast: can't broadcast"
-       (Array.for_all ~f:(fun (from, to_) -> to_ >= from && to_ % from = 0));
-  init to_dims ~f:(fun index ->
-    let from_index =
-      Array.subo index ~pos:dims_padding_length ~len:(Array.length from_dims)
-      |> Array.map2_exn from_dims ~f:(fun from_dim index_dim -> index_dim % from_dim)
-    in
-    get t from_index)
 ;;
 
 let%expect_test "broadcast" =
@@ -309,13 +295,6 @@ let%expect_test "broadcast" =
   broadcast_and_print t ~dims:[| 2; 2; 2 |];
   [%expect {| ((t (((1 2) (3 4)) ((1 2) (3 4)))) (dims (2 2 2))) |}]
 ;;
-
-module O = struct
-  let ( + ) = add
-  let ( - ) = sub
-  let ( * ) = mul
-  let ( ~- ) = neg
-end
 
 module With_shape = struct
   type nonrec t = t

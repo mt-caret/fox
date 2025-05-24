@@ -102,7 +102,7 @@ let infer_dims = function
     in
     if keep_dims
     then
-      Array.mapi dims ~f:(fun index dim -> if Set.mem dims_to_sum index then dim else 1)
+      Array.mapi dims ~f:(fun index dim -> if Set.mem dims_to_sum index then 1 else dim)
     else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
   | Broadcast { value = from_dims; dims = to_dims } ->
     if Array.length to_dims < Array.length from_dims
@@ -147,3 +147,49 @@ let infer_optional_dims =
   | Broadcast { value = from_dims; dims = to_dims } ->
     unary_op from_dims ~f:(fun from_dims -> broadcast ~value:from_dims ~dims:to_dims)
 ;;
+
+module Make_operators (M : sig
+    type value
+
+    val eval : value t -> value
+  end) : Operators_intf.S with type t := M.value = struct
+  let add a b = M.eval (Add (a, b))
+  let sub a b = M.eval (Sub (a, b))
+  let mul a b = M.eval (Mul (a, b))
+  let neg a = M.eval (Neg a)
+  let sin a = M.eval (Sin a)
+  let cos a = M.eval (Cos a)
+  let matmul a b = M.eval (Matmul (a, b))
+  let transpose a = M.eval (Transpose a)
+  let sum value ~dims ~keep_dims = M.eval (Sum { value; dims; keep_dims })
+  let broadcast value ~dims = M.eval (Broadcast { value; dims })
+
+  module O = struct
+    let ( + ) = add
+    let ( - ) = sub
+    let ( * ) = mul
+    let ( ~- ) = neg
+  end
+end
+
+module Make_operators_with_dim_check (M : sig
+    type value
+
+    val eval : value t -> value
+    val dims : value -> int array
+  end) : Operators_intf.S with type t := M.value = struct
+  include Make_operators (struct
+      type value = M.value
+
+      let eval =
+        fun t ->
+        let inferred_out_dims = map t ~f:M.dims |> infer_dims in
+        let out = M.eval t in
+        [%test_result: int array]
+          (M.dims out)
+          ~expect:inferred_out_dims
+          ~message:"[Op.infer_dims] dims mismatch with actual dims";
+        out
+      ;;
+    end)
+end
