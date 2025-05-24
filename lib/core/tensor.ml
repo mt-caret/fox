@@ -53,6 +53,7 @@ let create_uninitialized dims =
   Bigarray.Genarray.create Bigarray.float64 Bigarray.c_layout dims
 ;;
 
+let init dims ~f = Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims f
 let reshape t ~dims = Bigarray.reshape t dims
 
 (* TODO: write a ppx that allows writing [5t] or [5.5t] which expands to
@@ -205,6 +206,108 @@ let%expect_test "transpose" =
   let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
   transpose t |> sexp_of_t |> print_s;
   [%expect {| ((1 3) (2 4)) |}]
+;;
+
+let sum_single_axis t ~axis ~keep_dim =
+  let dims = dims t in
+  let dims_length = Array.length dims in
+  if axis < 0 || axis >= dims_length
+  then raise_s [%message "sum_single_axis: axis out of bounds" (axis : int)];
+  let dims_left = Array.subo dims ~len:axis in
+  let dims_right = Array.subo dims ~pos:(axis + 1) ~len:(dims_length - axis - 1) in
+  let result_dims =
+    Array.concat [ dims_left; (if keep_dim then [| 1 |] else [||]); dims_right ]
+  in
+  init result_dims ~f:(fun index ->
+    let index =
+      if keep_dim
+      then Array.copy index
+      else
+        Array.init dims_length ~f:(fun i ->
+          match Ordering.of_int (Int.compare i axis) with
+          | Less -> index.(i)
+          | Equal -> 0
+          | Greater -> index.(i - 1))
+    in
+    let acc = ref 0. in
+    for i = 0 to dims.(axis) - 1 do
+      index.(axis) <- i;
+      acc := !acc +. get t index
+    done;
+    !acc)
+;;
+
+let%expect_test "sum_single_axis" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  sum_single_axis t ~axis:0 ~keep_dim:false |> sexp_of_t |> print_s;
+  [%expect {| (4 6) |}];
+  sum_single_axis t ~axis:0 ~keep_dim:true |> sexp_of_t |> print_s;
+  [%expect {| ((4 6)) |}];
+  sum_single_axis t ~axis:1 ~keep_dim:false |> sexp_of_t |> print_s;
+  [%expect {| (3 7) |}];
+  sum_single_axis t ~axis:1 ~keep_dim:true |> sexp_of_t |> print_s;
+  [%expect {| ((3) (7)) |}]
+;;
+
+let sum t ~dims:dims_to_sum ~keep_dims =
+  let dims = dims t in
+  let dims_length = Array.length dims in
+  [%test_pred: int array]
+    ~message:"sum: dims out of bounds"
+    (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
+    dims_to_sum;
+  let dims_to_sum =
+    Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
+    |> Array.to_list
+    |> List.sort ~compare:(Comparable.reverse Int.compare)
+  in
+  List.fold dims_to_sum ~init:t ~f:(fun t axis ->
+    sum_single_axis t ~axis ~keep_dim:keep_dims)
+;;
+
+let%expect_test "sum" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  sum t ~dims:[| 0; 1 |] ~keep_dims:false |> sexp_of_t |> print_s;
+  [%expect {| 10 |}];
+  sum t ~dims:[| 0; 1 |] ~keep_dims:true |> sexp_of_t |> print_s;
+  [%expect {| ((10)) |}]
+;;
+
+let broadcast t ~dims:to_dims =
+  let from_dims = dims t in
+  if Array.length to_dims < Array.length from_dims
+  then
+    raise_s
+      [%message
+        "broadcast: can't broadcast to a larger rank"
+          (from_dims : int array)
+          (to_dims : int array)];
+  let dims_padding_length = Array.length to_dims - Array.length from_dims in
+  let padded_from_dims =
+    Array.append (Array.create ~len:dims_padding_length 1) from_dims
+  in
+  Array.zip_exn padded_from_dims to_dims
+  |> [%test_pred: (int * int) array]
+       ~message:"broadcast: can't broadcast"
+       (Array.for_all ~f:(fun (from, to_) -> to_ >= from && to_ % from = 0));
+  init to_dims ~f:(fun index ->
+    let from_index =
+      Array.subo index ~pos:dims_padding_length ~len:(Array.length from_dims)
+      |> Array.map2_exn from_dims ~f:(fun from_dim index_dim -> index_dim % from_dim)
+    in
+    get t from_index)
+;;
+
+let%expect_test "broadcast" =
+  let broadcast_and_print t ~dims:dims' =
+    let t = broadcast t ~dims:dims' in
+    print_s [%message "" (t : t) ~dims:(dims t : int array)]
+  in
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  broadcast_and_print t ~dims:[| 1; 2; 2 |];
+  [%expect {| ((t (((1 2) (3 4)))) (dims (1 2 2))) |}];
+  broadcast_and_print t ~dims:[| 2; 2; 2 |];
+  [%expect {| ((t (((1 2) (3 4)) ((1 2) (3 4)))) (dims (2 2 2))) |}]
 ;;
 
 module O = struct

@@ -19,26 +19,44 @@ let xla_subcomp
     match atom with
     | Var { var; dims = _ } -> Map.find_exn env var
     | Value value ->
-      Value.to_tensor_exn value |> tensor_to_xla_literal |> Xla.Op.constant ~builder
+      let tensor = Value.to_tensor_exn value in
+      let op = tensor_to_xla_literal tensor |> Xla.Op.constant ~builder in
+      op, Tensor.dims tensor
   in
   let env =
     List.fold equations ~init:env ~f:(fun env { var; op } ->
+      let op = Op.map op ~f:(read_atom ~env) in
       let xla_op =
-        match Op.map op ~f:(read_atom ~env) with
-        | Add (a, b) -> Xla.Op.add a b
-        | Sub (a, b) -> Xla.Op.sub a b
-        | Mul (a, b) -> Xla.Op.mul a b
-        | Neg a -> Xla.Op.neg a
-        | Sin a -> Xla.Op.sin a
-        | Cos a -> Xla.Op.cos a
-        | Matmul (a, b) -> Xla.Op.matmul a b
-        | Transpose a ->
+        match op with
+        | Add ((a, _), (b, _)) -> Xla.Op.add a b
+        | Sub ((a, _), (b, _)) -> Xla.Op.sub a b
+        | Mul ((a, _), (b, _)) -> Xla.Op.mul a b
+        | Neg (a, _) -> Xla.Op.neg a
+        | Sin (a, _) -> Xla.Op.sin a
+        | Cos (a, _) -> Xla.Op.cos a
+        | Matmul ((a, _), (b, _)) -> Xla.Op.matmul a b
+        | Transpose (a, _) ->
           (* TODO: support arbitrary dimensions *)
           Xla.Op.transpose a ~dim_indexes:[| 1; 0 |]
+        | Sum { value = value, _; dims; keep_dims } ->
+          Xla.Op.reduce_sum value ~dims ~keep_dims
+        | Broadcast { value = value, in_dims; dims = out_dims } ->
+          let padding_length = Array.length out_dims - Array.length in_dims in
+          Xla.Op.broadcast_in_dim
+            value
+            ~out_dims
+            ~broadcast_dims:(Array.mapi in_dims ~f:(fun i _ -> padding_length + i))
       in
-      Map.add_exn env ~key:var ~data:xla_op)
+      let dims =
+        (* TODO: clean this up... *)
+        Op.map op ~f:(fun (_xla_op, dims) -> Some (Array.to_list dims))
+        |> Fox_core.infer_dims
+        |> Option.value_exn ~message:"unexpected unknown dims"
+        |> Array.of_list
+      in
+      Map.add_exn env ~key:var ~data:(xla_op, dims))
   in
-  Nonempty_list.map return_vals ~f:(read_atom ~env)
+  Nonempty_list.map return_vals ~f:(fun atom -> read_atom atom ~env |> fst)
   |> Nonempty_list.to_list
   |> Xla.Op.tuple ~builder
 ;;
@@ -49,7 +67,7 @@ let xla_callable (expr : Expr.t) ~parameter_dims =
     List.zip_exn expr.parameters parameter_dims
     |> List.mapi ~f:(fun i (Var name, dims) ->
       (* TODO: right now we assume all parameters are single-element tensors. *)
-      Xla.Op.parameter name ~id:i ~ty:F64 ~dims ~builder:xla_builder)
+      Xla.Op.parameter name ~id:i ~ty:F64 ~dims ~builder:xla_builder, dims)
   in
   let out = xla_subcomp expr xla_params ~builder:xla_builder in
   let xla_client = Xla.Client.cpu () in
@@ -145,4 +163,36 @@ let%expect_test "jit and matmul" =
   |> print_s;
   print [%expect.output];
   [%expect {| (Tensor ((19 22) (43 50)) (dims (2 2))) |}]
+;;
+
+let%expect_test "jit and sum" =
+  let print output =
+    String.split_lines output
+    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
+    |> String.concat
+    |> print_endline
+  in
+  jit'
+    ~f:(fun x -> Value.sum x ~dims:[| 0; 1 |] ~keep_dims:false)
+    ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  print [%expect.output];
+  [%expect {| (Tensor 10) |}]
+;;
+
+let%expect_test "jit and broadcast" =
+  let print output =
+    String.split_lines output
+    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
+    |> String.concat
+    |> print_endline
+  in
+  jit'
+    ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |])
+    ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  print [%expect.output];
+  [%expect {| (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2))) |}]
 ;;

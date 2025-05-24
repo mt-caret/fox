@@ -9,6 +9,15 @@ type 'value t =
   | Cos of 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
+  | Sum of
+      { value : 'value
+      ; dims : int array
+      ; keep_dims : bool
+      }
+  | Broadcast of
+      { value : 'value
+      ; dims : int array
+      }
 [@@deriving sexp_of]
 
 let map t ~f =
@@ -21,6 +30,8 @@ let map t ~f =
   | Cos a -> Cos (f a)
   | Matmul (a, b) -> Matmul (f a, f b)
   | Transpose a -> Transpose (f a)
+  | Sum { value; dims; keep_dims } -> Sum { value = f value; dims; keep_dims }
+  | Broadcast { value; dims } -> Broadcast { value = f value; dims }
 ;;
 
 let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
@@ -33,6 +44,8 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   | Cos a -> M.cos a
   | Matmul (a, b) -> M.matmul a b
   | Transpose a -> M.transpose a
+  | Sum { value; dims; keep_dims } -> M.sum value ~dims ~keep_dims
+  | Broadcast { value; dims } -> M.broadcast value ~dims
 ;;
 
 (* TODO: this can be written in terms of [eval]. *)
@@ -46,4 +59,14 @@ let to_string t ~f =
   | Cos a -> [%string "cos %{f a}"]
   | Matmul (a, b) -> [%string "matmul %{f a} %{f b}"]
   | Transpose a -> [%string "transpose %{f a}"]
+  | Sum { value; dims; keep_dims } ->
+    let dims =
+      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+    in
+    [%string "sum %{f value} dims=[%{dims}] keep_dims=%{keep_dims#Bool}"]
+  | Broadcast { value; dims } ->
+    let dims =
+      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+    in
+    [%string "broadcast %{f value} dims=[%{dims}]"]
 ;;

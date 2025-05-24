@@ -131,6 +131,16 @@ module Jvp = struct
             t
             ~primal:(Value.transpose a.primal)
             ~tangent:(Value.transpose a.tangent)
+        | Sum { value; dims; keep_dims } ->
+          dual_number
+            t
+            ~primal:(Value.sum ~dims ~keep_dims value.primal)
+            ~tangent:(Value.sum ~dims ~keep_dims value.tangent)
+        | Broadcast { value; dims } ->
+          dual_number
+            t
+            ~primal:(Value.broadcast ~dims value.primal)
+            ~tangent:(Value.broadcast ~dims value.tangent)
       in
       continue k (Dual_number.to_value result)
   ;;
@@ -251,6 +261,7 @@ let%expect_test "pertubation confusion avoidance" =
   [%expect {| (Tensor 0) |}]
 ;;
 
+(* TODO: test against operations in tensor.ml *)
 let infer_dims (op : int list option Op.t) =
   match op with
   | Add (Some a, Some b) | Sub (Some a, Some b) | Mul (Some a, Some b) ->
@@ -263,12 +274,48 @@ let infer_dims (op : int list option Op.t) =
      | [ n; m ], [ m'; k ] ->
        [%test_eq: int] m m';
        Some [ n; k ]
-     | _ -> raise_s [%message "Invalid matmul dimensions" (a : int list) (b : int list)])
+     | _ ->
+       raise_s
+         [%message "infer_dims: Invalid matmul dimensions" (a : int list) (b : int list)])
   | Matmul (_, _) -> None
   | Transpose a ->
     Option.map a ~f:(function
       | [ n; k ] -> [ k; n ]
-      | a -> raise_s [%message "Invalid transpose dimensions" (a : int list)])
+      | a -> raise_s [%message "infer_dims: Invalid transpose dimensions" (a : int list)])
+  | Sum { value; dims = dims_to_sum; keep_dims } ->
+    Option.map value ~f:(fun dims ->
+      let dims_length = List.length dims in
+      [%test_pred: int array]
+        ~message:"infer_dims: sum: dims out of bounds"
+        (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
+        dims_to_sum;
+      let dims_to_sum =
+        Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
+        |> Int.Set.of_array
+      in
+      if keep_dims
+      then
+        List.mapi dims ~f:(fun index dim -> if Set.mem dims_to_sum index then dim else 1)
+      else List.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index)))
+  | Broadcast { value; dims = to_dims } ->
+    Option.map value ~f:(fun from_dims ->
+      let to_dims = Array.to_list to_dims in
+      if List.length to_dims < List.length from_dims
+      then
+        raise_s
+          [%message
+            "broadcast: can't broadcast to a larger rank"
+              (from_dims : int list)
+              (to_dims : int list)];
+      let dims_padding_length = List.length to_dims - List.length from_dims in
+      let padded_from_dims =
+        List.append (List.init dims_padding_length ~f:(fun _ -> 1)) from_dims
+      in
+      List.zip_exn padded_from_dims to_dims
+      |> [%test_pred: (int * int) list]
+           ~message:"broadcast: can't broadcast"
+           (List.for_all ~f:(fun (from, to_) -> to_ >= from && to_ % from = 0));
+      to_dims)
 ;;
 
 module Staging = struct
@@ -512,8 +559,18 @@ module Partial = struct
         | Cos (Known a) -> Known (Value.cos a)
         | Matmul (Known a, Known b) -> Known (Value.matmul a b)
         | Transpose (Known a) -> Known (Value.transpose a)
-        | (Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ | Matmul _ | Transpose _) as op
-          ->
+        | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
+        | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
+        | ( Add _
+          | Sub _
+          | Mul _
+          | Neg _
+          | Sin _
+          | Cos _
+          | Matmul _
+          | Transpose _
+          | Sum _
+          | Broadcast _ ) as op ->
           let binder = fresh_var t in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
@@ -779,7 +836,46 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
           accum_gradient ~ct_env var (Value.matmul (Value.transpose v) cotangent)
         | Transpose (Var { var; dims = _ }) ->
           accum_gradient ~ct_env var (Value.transpose cotangent)
-        | Add _ | Sub _ | Mul _ | Neg _ | Sin _ | Cos _ | Matmul _ | Transpose _ ->
+        | Sum { value = Var { var; dims }; dims = _; keep_dims = _ } ->
+          Value.broadcast
+            cotangent
+            ~dims:
+              (Option.value_exn dims ~message:"unexpected unknown dims" |> Array.of_list)
+          |> accum_gradient ~ct_env var
+        | Broadcast { value = Var { var; dims = from_dims }; dims = to_dims } ->
+          let from_dims =
+            Option.value_exn from_dims ~message:"unexpected unknown dims" |> Array.of_list
+          in
+          let padding_length = Array.length to_dims - Array.length from_dims in
+          let non_padded_broadcasts =
+            Array.sub to_dims ~pos:padding_length ~len:(Array.length from_dims)
+            |> Array.zip_exn from_dims
+            |> Array.filter_mapi ~f:(fun i (from, to_) ->
+              if from <> to_ then Some i else None)
+          in
+          let unpadded_cotangent =
+            match padding_length with
+            | 0 -> cotangent
+            | _ ->
+              Value.sum
+                cotangent
+                ~dims:(Array.init padding_length ~f:Fn.id)
+                ~keep_dims:false
+          in
+          (match non_padded_broadcasts with
+           | [||] -> unpadded_cotangent
+           | _ -> Value.sum unpadded_cotangent ~dims:non_padded_broadcasts ~keep_dims:true)
+          |> accum_gradient ~ct_env var
+        | Add _
+        | Sub _
+        | Mul _
+        | Neg _
+        | Sin _
+        | Cos _
+        | Matmul _
+        | Transpose _
+        | Sum _
+        | Broadcast _ ->
           raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
       in
       ct_env)
@@ -880,5 +976,12 @@ let%expect_test "grad" =
       ~x:(Value.of_float 3.))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor 2.9799849932008908) |}]
+  [%expect {| (Tensor 2.9799849932008908) |}];
+  Eval.handle ~f:(fun () ->
+    grad'
+      ~f:(Value.sum ~dims:[| 0; 1 |] ~keep_dims:false)
+      ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ])))
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  [%expect {| (Tensor ((1 1) (1 1)) (dims (2 2))) |}]
 ;;

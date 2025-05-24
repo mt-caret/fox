@@ -9,6 +9,15 @@ type 'value t =
   | Cos of 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
+  | Sum of
+      { value : 'value
+      ; dims : int array
+      ; keep_dims : bool
+      }
+  | Broadcast of
+      { value : 'value
+      ; dims : int array
+      }
 [@@deriving sexp_of]
 
 val map : 'a t -> f:('a -> 'b) -> 'b t

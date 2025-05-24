@@ -33,6 +33,12 @@ let cos a = Effect.perform (Fox_effect.Op (Cos a))
 let matmul a b = Effect.perform (Fox_effect.Op (Matmul (a, b)))
 let transpose a = Effect.perform (Fox_effect.Op (Transpose a))
 
+let sum a ~dims ~keep_dims =
+  Effect.perform (Fox_effect.Op (Sum { value = a; dims; keep_dims }))
+;;
+
+let broadcast a ~dims = Effect.perform (Fox_effect.Op (Broadcast { value = a; dims }))
+
 module O = struct
   let ( + ) = add
   let ( - ) = sub
