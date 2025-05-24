@@ -4,7 +4,7 @@ type t =
   | T :
       { value : 'a
       ; type_id : 'a Type_equal.Id.t
-      ; dims : int list option
+      ; dims : int array option
       }
       -> t
 [@@deriving sexp_of]

@@ -23,3 +23,5 @@ type 'value t =
 val map : 'a t -> f:('a -> 'b) -> 'b t
 val eval : (module Operators_intf.S with type t = 'a) -> 'a t -> 'a
 val to_string : 'a t -> f:('a -> string) -> string
+val infer_dims : int array t -> int array
+val infer_optional_dims : int array option t -> int array option

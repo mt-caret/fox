@@ -16,7 +16,7 @@ module Atom = struct
   type t =
     | Var of
         { var : Var.t
-        ; dims : int list option
+        ; dims : int array option
         }
     | Value of Value.t
   [@@deriving sexp_of]

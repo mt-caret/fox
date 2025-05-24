@@ -4,12 +4,12 @@ type t = Value0.t =
   | T :
       { value : 'a
       ; type_id : 'a Type_equal.Id.t
-      ; dims : int list option
+      ; dims : int array option
       }
       -> t
 [@@deriving sexp_of]
 
-val dims : t -> int list option
+val dims : t -> int array option
 val tree_def : Value_tree.Def.t
 val of_tensor : Tensor.t -> t
 val to_tensor_exn : t -> Tensor.t

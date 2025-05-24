@@ -18,7 +18,7 @@ type 'value t =
       { value : 'value
       ; dims : int array
       }
-[@@deriving sexp_of]
+[@@deriving sexp_of, variants]
 
 let map t ~f =
   match t with
@@ -48,7 +48,6 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   | Broadcast { value; dims } -> M.broadcast value ~dims
 ;;
 
-(* TODO: this can be written in terms of [eval]. *)
 let to_string t ~f =
   match t with
   | Add (a, b) -> [%string "add %{f a} %{f b}"]
@@ -69,4 +68,81 @@ let to_string t ~f =
       Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
     in
     [%string "broadcast %{f value} dims=[%{dims}]"]
+;;
+
+let infer_dims = function
+  | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) ->
+    [%test_eq: int array] dims1 dims2;
+    dims1
+  | Neg dims | Sin dims | Cos dims -> dims
+  | Matmul (dims1, dims2) ->
+    (match dims1, dims2 with
+     | [| n; m |], [| m'; k |] ->
+       [%test_eq: int] m m';
+       [| n; k |]
+     | _ ->
+       raise_s
+         [%message
+           "infer_dims: Invalid matmul dimensions" (dims1 : int array) (dims2 : int array)])
+  | Transpose dims ->
+    (match dims with
+     | [| n; k |] -> [| k; n |]
+     | dims ->
+       raise_s [%message "infer_dims: Invalid transpose dimensions" (dims : int array)])
+  | Sum { value = dims; dims = dims_to_sum; keep_dims } ->
+    let dims_length = Array.length dims in
+    [%test_pred: int array]
+      ~message:"infer_dims: sum: dims out of bounds"
+      (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
+      dims_to_sum;
+    let dims_to_sum =
+      Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
+      |> Int.Set.of_array
+    in
+    if keep_dims
+    then
+      Array.mapi dims ~f:(fun index dim -> if Set.mem dims_to_sum index then dim else 1)
+    else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
+  | Broadcast { value = from_dims; dims = to_dims } ->
+    if Array.length to_dims < Array.length from_dims
+    then
+      raise_s
+        [%message
+          "broadcast: can't broadcast to a larger rank"
+            (from_dims : int array)
+            (to_dims : int array)];
+    let dims_padding_length = Array.length to_dims - Array.length from_dims in
+    let padded_from_dims =
+      Array.append (Array.create ~len:dims_padding_length 1) from_dims
+    in
+    Array.zip_exn padded_from_dims to_dims
+    |> [%test_pred: (int * int) array]
+         ~message:"broadcast: can't broadcast"
+         (Array.for_all ~f:(fun (from, to_) -> to_ >= from && to_ % from = 0));
+    to_dims
+;;
+
+let infer_optional_dims =
+  let unary_op dims ~f = Option.map dims ~f:(fun dims -> infer_dims (f dims)) in
+  let elementwise_binary_op dims1 dims2 ~f =
+    match dims1, dims2 with
+    | Some dims1, Some dims2 -> Some (infer_dims (f dims1 dims2))
+    | _ -> Option.first_some dims1 dims2
+  in
+  function
+  | Add (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:add
+  | Sub (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:sub
+  | Mul (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:mul
+  | Neg dims -> unary_op dims ~f:neg
+  | Sin dims -> unary_op dims ~f:sin
+  | Cos dims -> unary_op dims ~f:cos
+  | Matmul (dims1, dims2) ->
+    (match dims1, dims2 with
+     | Some dims1, Some dims2 -> Some (infer_dims (Matmul (dims1, dims2)))
+     | _ -> None)
+  | Transpose dims -> unary_op dims ~f:transpose
+  | Sum { value = dims; dims = dims_to_sum; keep_dims } ->
+    unary_op dims ~f:(fun dims -> sum ~value:dims ~dims:dims_to_sum ~keep_dims)
+  | Broadcast { value = from_dims; dims = to_dims } ->
+    unary_op from_dims ~f:(fun from_dims -> broadcast ~value:from_dims ~dims:to_dims)
 ;;

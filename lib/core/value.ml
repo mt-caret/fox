@@ -13,7 +13,7 @@ include T
 let dims (T { value = _; type_id = _; dims }) = dims
 
 let of_tensor value =
-  T { value; type_id = Tensor.type_id; dims = Some (Tensor.dims value |> Array.to_list) }
+  T { value; type_id = Tensor.type_id; dims = Some (Tensor.dims value) }
 ;;
 
 let to_tensor_exn (T { value; type_id; dims = _ } as t) : Tensor.t =

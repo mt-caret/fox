@@ -70,7 +70,7 @@ module Jvp = struct
   let dual_number t ~primal ~tangent : Dual_number.t =
     (match Value.dims primal, Value.dims tangent with
      | Some primal_dims, Some tangent_dims ->
-       [%test_eq: int list] primal_dims tangent_dims
+       [%test_eq: int array] primal_dims tangent_dims
      | _ -> ());
     { primal; tangent; id = t.id }
   ;;
@@ -81,7 +81,7 @@ module Jvp = struct
       | None ->
         (* TOOD: Unsure if this is correct *)
         Value.of_float 0.
-      | Some dims -> Value.of_tensor (Tensor.create ~dims:(Array.of_list dims) 0.)
+      | Some dims -> Value.of_tensor (Tensor.create ~dims 0.)
     in
     match Type_equal.Id.same_witness type_id Dual_number.type_id with
     | Some T ->
@@ -261,63 +261,6 @@ let%expect_test "pertubation confusion avoidance" =
   [%expect {| (Tensor 0) |}]
 ;;
 
-(* TODO: test against operations in tensor.ml *)
-let infer_dims (op : int list option Op.t) =
-  match op with
-  | Add (Some a, Some b) | Sub (Some a, Some b) | Mul (Some a, Some b) ->
-    [%test_eq: int list] a b;
-    Some a
-  | Add (a, b) | Sub (a, b) | Mul (a, b) -> Option.first_some a b
-  | Neg a | Sin a | Cos a -> a
-  | Matmul (Some a, Some b) ->
-    (match a, b with
-     | [ n; m ], [ m'; k ] ->
-       [%test_eq: int] m m';
-       Some [ n; k ]
-     | _ ->
-       raise_s
-         [%message "infer_dims: Invalid matmul dimensions" (a : int list) (b : int list)])
-  | Matmul (_, _) -> None
-  | Transpose a ->
-    Option.map a ~f:(function
-      | [ n; k ] -> [ k; n ]
-      | a -> raise_s [%message "infer_dims: Invalid transpose dimensions" (a : int list)])
-  | Sum { value; dims = dims_to_sum; keep_dims } ->
-    Option.map value ~f:(fun dims ->
-      let dims_length = List.length dims in
-      [%test_pred: int array]
-        ~message:"infer_dims: sum: dims out of bounds"
-        (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
-        dims_to_sum;
-      let dims_to_sum =
-        Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
-        |> Int.Set.of_array
-      in
-      if keep_dims
-      then
-        List.mapi dims ~f:(fun index dim -> if Set.mem dims_to_sum index then dim else 1)
-      else List.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index)))
-  | Broadcast { value; dims = to_dims } ->
-    Option.map value ~f:(fun from_dims ->
-      let to_dims = Array.to_list to_dims in
-      if List.length to_dims < List.length from_dims
-      then
-        raise_s
-          [%message
-            "broadcast: can't broadcast to a larger rank"
-              (from_dims : int list)
-              (to_dims : int list)];
-      let dims_padding_length = List.length to_dims - List.length from_dims in
-      let padded_from_dims =
-        List.append (List.init dims_padding_length ~f:(fun _ -> 1)) from_dims
-      in
-      List.zip_exn padded_from_dims to_dims
-      |> [%test_pred: (int * int) list]
-           ~message:"broadcast: can't broadcast"
-           (List.for_all ~f:(fun (from, to_) -> to_ >= from && to_ % from = 0));
-      to_dims)
-;;
-
 module Staging = struct
   type t =
     { mutable equations : Expr.Eq.t list
@@ -337,7 +280,7 @@ module Staging = struct
     | effect Fox_effect.Op op, k ->
       let binder = fresh_var t in
       t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
-      let dims = Op.map op ~f:Value.dims |> infer_dims in
+      let dims = Op.map op ~f:Value.dims |> Op.infer_optional_dims in
       continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
   ;;
 end
@@ -509,7 +452,7 @@ module Partial_value = struct
     | Known of Value.t
     | Unknown of
         { var : Expr.Var.t
-        ; dims : int list option
+        ; dims : int array option
         }
   [@@deriving sexp_of]
 
@@ -574,7 +517,10 @@ module Partial = struct
           let binder = fresh_var t in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
-          Unknown { var = binder; dims = infer_dims (Op.map op ~f:Partial_value.dims) }
+          Unknown
+            { var = binder
+            ; dims = Op.infer_optional_dims (Op.map op ~f:Partial_value.dims)
+            }
       in
       continue k (T { value = result; type_id = Partial_value.type_id; dims = None })
   ;;
@@ -798,7 +744,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
     |> Option.value_or_thunk ~default:(fun () ->
       match dims with
       | None -> raise_s [%message "unexpected unknown dims" (var : Expr.Var.t)]
-      | Some dims -> Tensor.zeros ~dims:(Array.of_list dims) |> Value.of_tensor)
+      | Some dims -> Tensor.zeros ~dims |> Value.of_tensor)
   in
   let ct_env =
     List.zip_exn (Nonempty_list.to_list expr.return_vals) cotangents
@@ -812,7 +758,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
   let ct_env =
     List.rev expr.equations
     |> List.fold ~init:ct_env ~f:(fun ct_env { var; op } ->
-      let cotangent_dims = Op.map op ~f:Expr.Atom.dims |> infer_dims in
+      let cotangent_dims = Op.map op ~f:Expr.Atom.dims |> Op.infer_optional_dims in
       let cotangent = read_gradient ~ct_env var ~dims:cotangent_dims in
       let ct_env =
         match op with
@@ -839,13 +785,10 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Sum { value = Var { var; dims }; dims = _; keep_dims = _ } ->
           Value.broadcast
             cotangent
-            ~dims:
-              (Option.value_exn dims ~message:"unexpected unknown dims" |> Array.of_list)
+            ~dims:(Option.value_exn dims ~message:"unexpected unknown dims")
           |> accum_gradient ~ct_env var
         | Broadcast { value = Var { var; dims = from_dims }; dims = to_dims } ->
-          let from_dims =
-            Option.value_exn from_dims ~message:"unexpected unknown dims" |> Array.of_list
-          in
+          let from_dims = Option.value_exn from_dims ~message:"unexpected unknown dims" in
           let padding_length = Array.length to_dims - Array.length from_dims in
           let non_padded_broadcasts =
             Array.sub to_dims ~pos:padding_length ~len:(Array.length from_dims)
