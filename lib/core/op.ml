@@ -70,6 +70,7 @@ let to_string t ~f =
     [%string "broadcast %{f value} dims=[%{dims}]"]
 ;;
 
+(* TODO: test against operations in tensor.ml *)
 let infer_dims = function
   | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) ->
     [%test_eq: int array] dims1 dims2;
