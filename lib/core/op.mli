@@ -28,7 +28,7 @@ val to_string : 'a t -> f:('a -> string) -> string
 val infer_dims : int array t -> int array
 
 module Make_operators (M : sig
-    type value
+    type value [@@deriving sexp_of]
 
     val of_float : float -> value
     val eval : value t -> value

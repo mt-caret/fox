@@ -22,7 +22,7 @@ let of_float x = of_tensor (Tensor.of_float x)
 let to_float_exn t : float = to_tensor_exn t |> Tensor.item
 
 include Op.Make_operators (struct
-    type value = t
+    type value = t [@@deriving sexp_of]
 
     let of_float float = of_tensor (Tensor.of_float float)
     let eval op = Effect.perform (Fox_effect.Op op)

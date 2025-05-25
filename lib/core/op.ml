@@ -142,7 +142,7 @@ let infer_dims = function
 ;;
 
 module Make_operators (M : sig
-    type value
+    type value [@@deriving sexp_of]
 
     val of_float : float -> value
     val eval : value t -> value
@@ -185,14 +185,29 @@ module Make_operators (M : sig
   end
 
   let scale value float = O.(value * broadcast (M.of_float float) ~dims:(M.dims value))
+  let length value = Array.fold (M.dims value) ~init:1 ~f:( * )
 
   let mean ?dims ?keep_dims value =
     let sum = sum ?dims ?keep_dims value in
-    let sum_dims = M.dims sum in
+    let reduction_factor = length value / length sum |> Int.to_float |> M.of_float in
+    O.(sum / broadcast reduction_factor ~dims:(M.dims sum))
+  ;;
+
+  let var ?dims ?keep_dims ?(correction = true) value =
+    let mean = mean ?dims ~keep_dims:true value |> broadcast ~dims:(M.dims value) in
+    let diff = O.(value - mean) in
+    let diff_squared = O.(diff * diff) in
+    let sum = sum ?dims ?keep_dims diff_squared in
+    let reduction_factor = length value / length sum in
     let reduction_factor =
-      Array.fold (M.dims value) ~init:1 ~f:( * ) / Array.fold sum_dims ~init:1 ~f:( * )
+      (if correction then reduction_factor - 1 else reduction_factor)
+      |> Int.to_float
+      |> M.of_float
     in
-    let reduction_factor = M.of_float (Int.to_float reduction_factor) in
-    O.(sum / broadcast reduction_factor ~dims:sum_dims)
+    O.(sum / broadcast reduction_factor ~dims:(M.dims sum))
+  ;;
+
+  let std ?dims ?keep_dims ?correction value =
+    var ?dims ?keep_dims ?correction value |> sqrt
   ;;
 end

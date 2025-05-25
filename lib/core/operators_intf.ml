@@ -15,6 +15,21 @@ module type S = sig
   val transpose : t -> t
   val sum : ?dims:[ `Just of int array | `All ] -> ?keep_dims:bool -> t -> t
   val mean : ?dims:[ `Just of int array | `All ] -> ?keep_dims:bool -> t -> t
+
+  val var
+    :  ?dims:[ `Just of int array | `All ]
+    -> ?keep_dims:bool
+    -> ?correction:bool
+    -> t
+    -> t
+
+  val std
+    :  ?dims:[ `Just of int array | `All ]
+    -> ?keep_dims:bool
+    -> ?correction:bool
+    -> t
+    -> t
+
   val broadcast : t -> dims:int array -> t
   val scale : t -> float -> t
 

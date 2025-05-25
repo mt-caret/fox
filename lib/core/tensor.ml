@@ -179,7 +179,7 @@ let%expect_test "sum_single_axis" =
 ;;
 
 include Op.Make_operators (struct
-    type value = t
+    type value = t [@@deriving sexp_of]
 
     let of_float = of_float
 
@@ -284,6 +284,22 @@ let%expect_test "mean" =
   [%expect {| ((2.5)) |}]
 ;;
 
+let%expect_test "var" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  var t ~keep_dims:false |> sexp_of_t |> print_s;
+  [%expect {| 1.6666666666666667 |}];
+  var t ~keep_dims:true |> sexp_of_t |> print_s;
+  [%expect {| ((1.6666666666666667)) |}]
+;;
+
+let%expect_test "std" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  std t ~keep_dims:false |> sexp_of_t |> print_s;
+  [%expect {| 1.2909944487358056 |}];
+  std t ~keep_dims:true |> sexp_of_t |> print_s;
+  [%expect {| ((1.2909944487358056)) |}]
+;;
+
 let%expect_test "broadcast" =
   let broadcast_and_print t ~dims:dims' =
     let t = broadcast t ~dims:dims' in
@@ -330,9 +346,9 @@ let%expect_test "normal" =
     |}];
   let t = normal ~dims:[| 10000 |] ~rng () in
   let mean = mean t |> item in
-  let std = item (sqrt (sum (map t ~f:(fun x -> (x -. mean) ** 2.)))) /. 100. in
+  let std = std t |> item in
   print_s [%message "" (mean : float) (std : float)];
-  [%expect {| ((mean 0.0026463860836857677) (std 0.98790724584777057)) |}]
+  [%expect {| ((mean 0.0026463860836857677) (std 0.98795664491502377)) |}]
 ;;
 
 module With_shape = struct
