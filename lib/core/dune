@@ -1,6 +1,10 @@
 (library
  (name fox_core)
  (inline_tests)
- (libraries core core_kernel.nonempty_list ppx_typed_fields.typed_fields_lib)
+ (libraries
+  core
+  core_kernel.nonempty_list
+  ppx_typed_fields.typed_fields_lib
+  splittable_random)
  (preprocess
   (pps ppx_jane ppx_typed_fields base_quickcheck.ppx_quickcheck)))

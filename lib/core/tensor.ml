@@ -296,6 +296,49 @@ let%expect_test "broadcast" =
   [%expect {| ((t (((1 2) (3 4)) ((1 2) (3 4)))) (dims (2 2 2))) |}]
 ;;
 
+(* Box-Muller transform *)
+let normal ?(mean = 0.) ?(std = 1.) ~dims ~rng () =
+  let rec rejection_sample_unit_normal rng =
+    let x1 = Splittable_random.float rng ~lo:(-1.) ~hi:1. in
+    let x2 = Splittable_random.float rng ~lo:(-1.) ~hi:1. in
+    let r2 = (x1 *. x1) +. (x2 *. x2) in
+    match Float.O.(r2 >= 1. || r2 = 0.) with
+    | true -> rejection_sample_unit_normal rng
+    | false ->
+      let f = sqrt (-2. *. log r2 /. r2) *. std in
+      (f *. x1) +. mean, (f *. x2) +. mean
+  in
+  let next = ref None in
+  init dims ~f:(fun _index ->
+    match !next with
+    | Some value ->
+      next := None;
+      value
+    | None ->
+      let value1, value2 = rejection_sample_unit_normal rng in
+      next := Some value2;
+      value1)
+;;
+
+let%expect_test "normal" =
+  let rng = Splittable_random.of_int 0 in
+  normal ~dims:[| 2; 2 |] ~rng () |> sexp_of_t |> print_s;
+  [%expect
+    {|
+    ((0.39995642633665462 1.1602368073797789)
+     (1.1461698444484156 -0.27508260258159217))
+    |}];
+  let t = normal ~dims:[| 10000 |] ~rng () in
+  let mean = item (sum t ~dims:[| 0 |] ~keep_dims:false) /. 10000. in
+  let std =
+    sqrt
+      (item (sum (map t ~f:(fun x -> (x -. mean) ** 2.)) ~dims:[| 0 |] ~keep_dims:false)
+       /. 10000.)
+  in
+  print_s [%message "" (mean : float) (std : float)];
+  [%expect {| ((mean 0.0026463860836857677) (std 0.98790724584777045)) |}]
+;;
+
 module With_shape = struct
   type nonrec t = t
 
