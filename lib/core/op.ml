@@ -11,7 +11,7 @@ type 'value t =
   | Transpose of 'value
   | Sum of
       { value : 'value
-      ; dims : int array
+      ; dims : [ `Just of int array | `All ]
       ; keep_dims : bool
       }
   | Broadcast of
@@ -60,9 +60,15 @@ let to_string t ~f =
   | Transpose a -> [%string "transpose %{f a}"]
   | Sum { value; dims; keep_dims } ->
     let dims =
-      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+      match dims with
+      | `All -> "all"
+      | `Just dims ->
+        let dims =
+          Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+        in
+        [%string "[%{dims}]"]
     in
-    [%string "sum %{f value} dims=[%{dims}] keep_dims=%{keep_dims#Bool}"]
+    [%string "sum %{f value} dims=%{dims} keep_dims=%{keep_dims#Bool}"]
   | Broadcast { value; dims } ->
     let dims =
       Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
@@ -91,19 +97,23 @@ let infer_dims = function
      | dims ->
        raise_s [%message "infer_dims: Invalid transpose dimensions" (dims : int array)])
   | Sum { value = dims; dims = dims_to_sum; keep_dims } ->
-    let dims_length = Array.length dims in
-    [%test_pred: int array]
-      ~message:"infer_dims: sum: dims out of bounds"
-      (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
-      dims_to_sum;
-    let dims_to_sum =
-      Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
-      |> Int.Set.of_array
-    in
-    if keep_dims
-    then
-      Array.mapi dims ~f:(fun index dim -> if Set.mem dims_to_sum index then 1 else dim)
-    else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
+    (match dims_to_sum with
+     | `All -> if keep_dims then Array.map dims ~f:(fun _ -> 1) else [||]
+     | `Just dims_to_sum ->
+       let dims_length = Array.length dims in
+       [%test_pred: int array]
+         ~message:"infer_dims: sum: dims out of bounds"
+         (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
+         dims_to_sum;
+       let dims_to_sum =
+         Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
+         |> Int.Set.of_array
+       in
+       if keep_dims
+       then
+         Array.mapi dims ~f:(fun index dim ->
+           if Set.mem dims_to_sum index then 1 else dim)
+       else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index)))
   | Broadcast { value = from_dims; dims = to_dims } ->
     if Array.length to_dims < Array.length from_dims
     then
@@ -161,7 +171,11 @@ module Make_operators (M : sig
   let cos a = M.eval (Cos a)
   let matmul a b = M.eval (Matmul (a, b))
   let transpose a = M.eval (Transpose a)
-  let sum value ~dims ~keep_dims = M.eval (Sum { value; dims; keep_dims })
+
+  let sum ?(dims = `All) ?(keep_dims = false) value =
+    M.eval (Sum { value; dims; keep_dims })
+  ;;
+
   let broadcast value ~dims = M.eval (Broadcast { value; dims })
 
   module O = struct

@@ -11,7 +11,7 @@ type 'value t =
   | Transpose of 'value
   | Sum of
       { value : 'value
-      ; dims : int array
+      ; dims : [ `Just of int array | `All ]
       ; keep_dims : bool
       }
   | Broadcast of

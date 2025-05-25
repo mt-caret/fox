@@ -802,12 +802,16 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
             | _ ->
               Value.sum
                 cotangent
-                ~dims:(Array.init padding_length ~f:Fn.id)
+                ~dims:(`Just (Array.init padding_length ~f:Fn.id))
                 ~keep_dims:false
           in
           (match non_padded_broadcasts with
            | [||] -> unpadded_cotangent
-           | _ -> Value.sum unpadded_cotangent ~dims:non_padded_broadcasts ~keep_dims:true)
+           | _ ->
+             Value.sum
+               unpadded_cotangent
+               ~dims:(`Just non_padded_broadcasts)
+               ~keep_dims:true)
           |> accum_gradient ~ct_env var
         | Add _
         | Sub _
@@ -922,7 +926,7 @@ let%expect_test "grad" =
   [%expect {| (Tensor 2.9799849932008908) |}];
   Eval.handle ~f:(fun () ->
     grad'
-      ~f:(Value.sum ~dims:[| 0; 1 |] ~keep_dims:false)
+      ~f:(Value.sum ~keep_dims:false)
       ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ])))
   |> [%sexp_of: Value.t]
   |> print_s;

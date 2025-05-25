@@ -11,7 +11,7 @@ module type S = sig
   val cos : t -> t
   val matmul : t -> t -> t
   val transpose : t -> t
-  val sum : t -> dims:int array -> keep_dims:bool -> t
+  val sum : ?dims:[ `Just of int array | `All ] -> ?keep_dims:bool -> t -> t
   val broadcast : t -> dims:int array -> t
 
   module O : sig

@@ -38,7 +38,12 @@ let xla_subcomp
         | Transpose (a, _) ->
           (* TODO: support arbitrary dimensions *)
           Xla.Op.transpose a ~dim_indexes:[| 1; 0 |]
-        | Sum { value = value, _; dims; keep_dims } ->
+        | Sum { value = value, in_dims; dims; keep_dims } ->
+          let dims =
+            match dims with
+            | `All -> Array.init (Array.length in_dims) ~f:Fn.id
+            | `Just dims -> dims
+          in
           Xla.Op.reduce_sum value ~dims ~keep_dims
         | Broadcast { value = value, in_dims; dims = out_dims } ->
           let padding_length = Array.length out_dims - Array.length in_dims in
@@ -167,7 +172,7 @@ let%expect_test "jit and sum" =
     |> print_endline
   in
   jit'
-    ~f:(fun x -> Value.sum x ~dims:[| 0; 1 |] ~keep_dims:false)
+    ~f:(fun x -> Value.sum x)
     ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;

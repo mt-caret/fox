@@ -242,8 +242,12 @@ include Op.Make_operators_with_dim_check (struct
         let dims = dims t in
         let dims_length = Array.length dims in
         let dims_to_sum =
-          Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
-          |> Array.to_list
+          (match dims_to_sum with
+           | `Just dims_to_sum ->
+             Array.map dims_to_sum ~f:(fun dim ->
+               if dim < 0 then dims_length + dim else dim)
+             |> Array.to_list
+           | `All -> List.range 0 dims_length)
           |> List.sort ~compare:(Comparable.reverse Int.compare)
         in
         List.fold dims_to_sum ~init:t ~f:(fun t axis ->
@@ -278,9 +282,9 @@ let%expect_test "transpose" =
 
 let%expect_test "sum" =
   let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
-  sum t ~dims:[| 0; 1 |] ~keep_dims:false |> sexp_of_t |> print_s;
+  sum t ~keep_dims:false |> sexp_of_t |> print_s;
   [%expect {| 10 |}];
-  sum t ~dims:[| 0; 1 |] ~keep_dims:true |> sexp_of_t |> print_s;
+  sum t ~keep_dims:true |> sexp_of_t |> print_s;
   [%expect {| ((10)) |}]
 ;;
 
@@ -329,12 +333,8 @@ let%expect_test "normal" =
      (1.1461698444484156 -0.27508260258159217))
     |}];
   let t = normal ~dims:[| 10000 |] ~rng () in
-  let mean = item (sum t ~dims:[| 0 |] ~keep_dims:false) /. 10000. in
-  let std =
-    sqrt
-      (item (sum (map t ~f:(fun x -> (x -. mean) ** 2.)) ~dims:[| 0 |] ~keep_dims:false)
-       /. 10000.)
-  in
+  let mean = item (sum t) /. 10000. in
+  let std = sqrt (item (sum (map t ~f:(fun x -> (x -. mean) ** 2.))) /. 10000.) in
   print_s [%message "" (mean : float) (std : float)];
   [%expect {| ((mean 0.0026463860836857677) (std 0.98790724584777045)) |}]
 ;;
