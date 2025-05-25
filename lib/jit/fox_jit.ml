@@ -35,6 +35,7 @@ let xla_subcomp
         | Neg (a, _) -> Xla.Op.neg a
         | Sin (a, _) -> Xla.Op.sin a
         | Cos (a, _) -> Xla.Op.cos a
+        | Sqrt (a, _) -> Xla.Op.sqrt a
         | Matmul ((a, _), (b, _)) -> Xla.Op.matmul a b
         | Transpose (a, _) ->
           (* TODO: support arbitrary dimensions *)

@@ -8,6 +8,7 @@ type 'value t =
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
+  | Sqrt of 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
   | Sum of
@@ -30,6 +31,7 @@ let map t ~f =
   | Neg a -> Neg (f a)
   | Sin a -> Sin (f a)
   | Cos a -> Cos (f a)
+  | Sqrt a -> Sqrt (f a)
   | Matmul (a, b) -> Matmul (f a, f b)
   | Transpose a -> Transpose (f a)
   | Sum { value; dims; keep_dims } -> Sum { value = f value; dims; keep_dims }
@@ -45,6 +47,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   | Neg a -> M.neg a
   | Sin a -> M.sin a
   | Cos a -> M.cos a
+  | Sqrt a -> M.sqrt a
   | Matmul (a, b) -> M.matmul a b
   | Transpose a -> M.transpose a
   | Sum { value; dims; keep_dims } -> M.sum value ~dims ~keep_dims
@@ -60,6 +63,7 @@ let to_string t ~f =
   | Neg a -> [%string "neg %{f a}"]
   | Sin a -> [%string "sin %{f a}"]
   | Cos a -> [%string "cos %{f a}"]
+  | Sqrt a -> [%string "sqrt %{f a}"]
   | Matmul (a, b) -> [%string "matmul %{f a} %{f b}"]
   | Transpose a -> [%string "transpose %{f a}"]
   | Sum { value; dims; keep_dims } ->
@@ -85,7 +89,7 @@ let infer_dims = function
   | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) | Div (dims1, dims2) ->
     [%test_eq: int array] dims1 dims2;
     dims1
-  | Neg dims | Sin dims | Cos dims -> dims
+  | Neg dims | Sin dims | Cos dims | Sqrt dims -> dims
   | Matmul (dims1, dims2) ->
     (match dims1, dims2 with
      | [| n; m |], [| m'; k |] ->
@@ -137,32 +141,6 @@ let infer_dims = function
     to_dims
 ;;
 
-let infer_optional_dims =
-  let unary_op dims ~f = Option.map dims ~f:(fun dims -> infer_dims (f dims)) in
-  let elementwise_binary_op dims1 dims2 ~f =
-    match dims1, dims2 with
-    | Some dims1, Some dims2 -> Some (infer_dims (f dims1 dims2))
-    | _ -> Option.first_some dims1 dims2
-  in
-  function
-  | Add (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:add
-  | Sub (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:sub
-  | Mul (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:mul
-  | Div (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:div
-  | Neg dims -> unary_op dims ~f:neg
-  | Sin dims -> unary_op dims ~f:sin
-  | Cos dims -> unary_op dims ~f:cos
-  | Matmul (dims1, dims2) ->
-    (match dims1, dims2 with
-     | Some dims1, Some dims2 -> Some (infer_dims (Matmul (dims1, dims2)))
-     | _ -> None)
-  | Transpose dims -> unary_op dims ~f:transpose
-  | Sum { value = dims; dims = dims_to_sum; keep_dims } ->
-    unary_op dims ~f:(fun dims -> sum ~value:dims ~dims:dims_to_sum ~keep_dims)
-  | Broadcast { value = from_dims; dims = to_dims } ->
-    unary_op from_dims ~f:(fun from_dims -> broadcast ~value:from_dims ~dims:to_dims)
-;;
-
 module Make_operators (M : sig
     type value
 
@@ -188,6 +166,7 @@ module Make_operators (M : sig
   let neg a = eval (Neg a)
   let sin a = eval (Sin a)
   let cos a = eval (Cos a)
+  let sqrt a = eval (Sqrt a)
   let matmul a b = eval (Matmul (a, b))
   let transpose a = eval (Transpose a)
 
@@ -204,6 +183,8 @@ module Make_operators (M : sig
     let ( / ) = div
     let ( ~- ) = neg
   end
+
+  let scale value float = O.(value * broadcast (M.of_float float) ~dims:(M.dims value))
 
   let mean ?dims ?keep_dims value =
     let sum = sum ?dims ?keep_dims value in

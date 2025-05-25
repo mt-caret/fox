@@ -118,6 +118,11 @@ module Jvp = struct
             t
             ~primal:(Value.cos a.primal)
             ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
+        | Sqrt a ->
+          dual_number
+            t
+            ~primal:(Value.sqrt a.primal)
+            ~tangent:(Value.div a.tangent (Value.scale (Value.sqrt a.primal) 2.))
         | Matmul (a, b) ->
           dual_number
             t
@@ -502,6 +507,7 @@ module Partial = struct
         | Neg (Known a) -> Known Value.O.(-a)
         | Sin (Known a) -> Known (Value.sin a)
         | Cos (Known a) -> Known (Value.cos a)
+        | Sqrt (Known a) -> Known (Value.sqrt a)
         | Matmul (Known a, Known b) -> Known (Value.matmul a b)
         | Transpose (Known a) -> Known (Value.transpose a)
         | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
@@ -513,6 +519,7 @@ module Partial = struct
           | Neg _
           | Sin _
           | Cos _
+          | Sqrt _
           | Matmul _
           | Transpose _
           | Sum _
@@ -823,6 +830,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Neg _
         | Sin _
         | Cos _
+        | Sqrt _
         | Matmul _
         | Transpose _
         | Sum _

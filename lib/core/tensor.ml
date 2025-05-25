@@ -191,6 +191,7 @@ include Op.Make_operators (struct
       | Neg t -> map t ~f:( ~-. )
       | Sin t -> map t ~f:Float.sin
       | Cos t -> map t ~f:Float.cos
+      | Sqrt t -> map t ~f:Float.sqrt
       | Matmul (t1, t2) ->
         (* TODO: support more than just 2D tensors for matmuls and transposes *)
         (match dims t1, dims t2 with
@@ -304,7 +305,7 @@ let normal ?(mean = 0.) ?(std = 1.) ~dims ~rng () =
     match Float.O.(r2 >= 1. || r2 = 0.) with
     | true -> rejection_sample_unit_normal rng
     | false ->
-      let f = sqrt (-2. *. log r2 /. r2) *. std in
+      let f = Float.sqrt (-2. *. log r2 /. r2) *. std in
       (f *. x1) +. mean, (f *. x2) +. mean
   in
   let next = ref None in
@@ -329,9 +330,9 @@ let%expect_test "normal" =
     |}];
   let t = normal ~dims:[| 10000 |] ~rng () in
   let mean = mean t |> item in
-  let std = sqrt (item (sum (map t ~f:(fun x -> (x -. mean) ** 2.))) /. 10000.) in
+  let std = item (sqrt (sum (map t ~f:(fun x -> (x -. mean) ** 2.)))) /. 100. in
   print_s [%message "" (mean : float) (std : float)];
-  [%expect {| ((mean 0.0026463860836857677) (std 0.98790724584777045)) |}]
+  [%expect {| ((mean 0.0026463860836857677) (std 0.98790724584777057)) |}]
 ;;
 
 module With_shape = struct
