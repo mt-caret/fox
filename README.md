@@ -38,3 +38,4 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
   - [ ] Diff XLA backend and OCaml
   - [ ] Diff OCaml/XLA vjp and Pytorch
 - [ ] Shape inference?
+- [ ] Mixed-precision support
