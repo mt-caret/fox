@@ -6,15 +6,15 @@ type t =
   | T :
       { value : 'a
       ; type_id : 'a Type_equal.Id.t
-      ; dims : int array option
+      ; dims : int array
       }
       -> t
+
+let dims (T { value = _; type_id = _; dims }) = dims
 
 let sexp_of_t (T { value; type_id; dims }) =
   let x = Type_equal.Id.to_sexp type_id value in
   match dims with
-  | None -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t) ~dims:"?"]
-  | Some [||] -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t)]
-  | Some dims ->
-    [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t) (dims : int array)]
+  | [||] -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t)]
+  | dims -> [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t) (dims : int array)]
 ;;

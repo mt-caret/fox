@@ -12,13 +12,13 @@ module Atom : sig
   type t =
     | Var of
         { var : Var.t
-        ; dims : int array option
+        ; dims : int array
         }
     | Value of Value.t
   [@@deriving sexp_of]
 
   val of_value : Value.t -> t
-  val dims : t -> int array option
+  val dims : t -> int array
 end
 
 module Eq : sig

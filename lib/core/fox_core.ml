@@ -68,21 +68,12 @@ module Jvp = struct
   let create () = { id = Id.create () }
 
   let dual_number t ~primal ~tangent : Dual_number.t =
-    (match Value.dims primal, Value.dims tangent with
-     | Some primal_dims, Some tangent_dims ->
-       [%test_eq: int array] primal_dims tangent_dims
-     | _ -> ());
+    [%test_eq: int array] (Value.dims primal) (Value.dims tangent);
     { primal; tangent; id = t.id }
   ;;
 
   let lift t (T { value = x; type_id; dims } as value : Value.t) : Dual_number.t =
-    let zeros () =
-      match dims with
-      | None ->
-        (* TOOD: Unsure if this is correct *)
-        Value.of_float 0.
-      | Some dims -> Value.of_tensor (Tensor.create ~dims 0.)
-    in
+    let zeros () = Value.of_tensor (Tensor.create ~dims 0.) in
     match Type_equal.Id.same_witness type_id Dual_number.type_id with
     | Some T ->
       if Id.equal t.id x.id then x else dual_number t ~primal:value ~tangent:(zeros ())
@@ -280,7 +271,7 @@ module Staging = struct
     | effect Fox_effect.Op op, k ->
       let binder = fresh_var t in
       t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
-      let dims = Op.map op ~f:Value.dims |> Op.infer_optional_dims in
+      let dims = Op.map op ~f:Value.dims |> Op.infer_dims in
       continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
   ;;
 end
@@ -295,20 +286,22 @@ let build_expr
       ~in_tree_def
   : Expr.t
   =
-  let arguments = Value_tree.Def.length in_tree_def in
   let staging = Staging.create () in
-  let parameters = List.init arguments ~f:(fun _ -> Staging.fresh_var staging) in
+  let parameters =
+    Value_tree.Def.flatten in_tree_def
+    |> List.map ~f:(fun dims -> Staging.fresh_var staging, dims)
+  in
   let f, out_tree_def =
     flatten_function (module In) (module Out) ~f ~in_tree_def ~here:[%here]
   in
   let f = Staged.unstage f in
   let result =
     Staging.handle staging ~f:(fun () ->
-      List.map parameters ~f:(fun parameter ->
-        Value.T { value = parameter; type_id = Expr.Var.type_id; dims = None })
+      List.map parameters ~f:(fun (parameter, dims) ->
+        Value.T { value = parameter; type_id = Expr.Var.type_id; dims })
       |> f)
   in
-  { parameters
+  { parameters = List.map parameters ~f:fst
   ; equations = List.rev staging.equations
   ; return_vals =
       Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value
@@ -316,12 +309,12 @@ let build_expr
   }
 ;;
 
-let build_expr' ~f : Expr.t =
-  build_expr (module Value) (module Value) ~f ~in_tree_def:Value.tree_def
+let build_expr' ~f ~in_dims : Expr.t =
+  build_expr (module Value) (module Value) ~f ~in_tree_def:(Value.tree_def ~dims:in_dims)
 ;;
 
 let%expect_test "build_expr" =
-  build_expr' ~f:foo |> Expr.to_string_hum |> print_endline;
+  build_expr' ~f:foo ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
     v_0 ->
@@ -332,7 +325,7 @@ let%expect_test "build_expr" =
 ;;
 
 let%expect_test "build_expr2" =
-  build_expr' ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.))
+  build_expr' ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.)) ~in_dims:[||]
   |> Expr.to_string_hum
   |> print_endline;
   [%expect
@@ -378,7 +371,8 @@ let eval_expr
 let eval_expr' = eval_expr (module Value) (module Value)
 
 let%expect_test "eval_expr" =
-  Eval.handle ~f:(fun () -> eval_expr' (build_expr' ~f:foo) (Value.of_float 2.))
+  Eval.handle ~f:(fun () ->
+    eval_expr' (build_expr' ~f:foo ~in_dims:[||]) (Value.of_float 2.))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect {| (Tensor 10) |}]
@@ -387,7 +381,7 @@ let%expect_test "eval_expr" =
 let%expect_test "jvp and eval_expr" =
   Eval.handle ~f:(fun () ->
     jvp'
-      ~f:(fun x -> eval_expr' (build_expr' ~f:foo) x)
+      ~f:(fun x -> eval_expr' (build_expr' ~f:foo ~in_dims:[||]) x)
       ~primal:(Value.of_float 2.)
       ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
@@ -397,7 +391,7 @@ let%expect_test "jvp and eval_expr" =
 
 let%expect_test "nth_order_derivative build_expr" =
   let print ~n =
-    build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x)
+    build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x) ~in_dims:[||]
     |> Expr.to_string_hum
     |> print_endline
   in
@@ -452,7 +446,7 @@ module Partial_value = struct
     | Known of Value.t
     | Unknown of
         { var : Expr.Var.t
-        ; dims : int array option
+        ; dims : int array
         }
   [@@deriving sexp_of]
 
@@ -517,12 +511,15 @@ module Partial = struct
           let binder = fresh_var t in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
-          Unknown
-            { var = binder
-            ; dims = Op.infer_optional_dims (Op.map op ~f:Partial_value.dims)
-            }
+          Unknown { var = binder; dims = Op.infer_dims (Op.map op ~f:Partial_value.dims) }
       in
-      continue k (T { value = result; type_id = Partial_value.type_id; dims = None })
+      continue
+        k
+        (T
+           { value = result
+           ; type_id = Partial_value.type_id
+           ; dims = Partial_value.dims result
+           })
   ;;
 end
 
@@ -567,19 +564,19 @@ let%expect_test "partially_apply_expr_flat" =
   let partial_values, expr =
     Eval.handle ~f:(fun () ->
       partially_apply_expr_flat
-        [ Known (Value.of_float 2.); Unknown { var = Var "x"; dims = None } ]
+        [ Known (Value.of_float 2.); Unknown { var = Var "x"; dims = [||] } ]
         ~f:(function
           | [ x; y ] ->
             let x2 = Value.O.(x * x) in
             ( [ x2; Value.O.((x2 * y) + Value.of_float 3.); x; Value.O.((y * y) + x2) ]
-            , Value.tree_def )
+            , Value.tree_def ~dims:[||] )
           | _ -> assert false))
   in
   print_s ([%sexp_of: Partial_value.t list] partial_values);
   [%expect
     {|
-    ((Known (Tensor 4)) (Unknown (var (Var v_3)) (dims (()))) (Known (Tensor 2))
-     (Unknown (var (Var v_1)) (dims (()))))
+    ((Known (Tensor 4)) (Unknown (var (Var v_3)) (dims ())) (Known (Tensor 2))
+     (Unknown (var (Var v_1)) (dims ())))
     |}];
   Expr.to_string_hum expr |> print_endline;
   [%expect
@@ -682,7 +679,7 @@ let%expect_test "linearize" =
     let c = Value.neg b in
     c
   in
-  build_expr' ~f |> Expr.to_string_hum |> print_endline;
+  build_expr' ~f ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
     v_0 ->
@@ -694,23 +691,25 @@ let%expect_test "linearize" =
     (module Value.Tuple2)
     (module Value.Tuple2)
     ~f:(fun (a, b) -> jvp' ~f ~primal:a ~tangent:b)
-    ~in_tree_def:Value.Tuple2.tree_def
+    ~in_tree_def:(Value.Tuple2.tree_def ~dims1:[||] ~dims2:[||])
   |> Expr.to_string_hum
   |> print_endline;
   [%expect
     {|
-    v_1 v_0 ->
-    v_2 = cos v_1
-    v_3 = mul v_2 v_0
-    v_4 = sin v_1
+    v_0 v_1 ->
+    v_2 = cos v_0
+    v_3 = mul v_2 v_1
+    v_4 = sin v_0
     v_5 = neg v_3
     v_6 = neg v_4
     in ( v_6, v_5 )
     |}];
   (* TODO: fix consts? *)
-  build_expr' ~f:(fun x ->
-    let y, _f_lin = linearize' ~f ~primals:x in
-    y)
+  build_expr'
+    ~f:(fun x ->
+      let y, _f_lin = linearize' ~f ~primals:x in
+      y)
+    ~in_dims:[||]
   |> Expr.to_string_hum
   |> print_endline;
   [%expect
@@ -722,7 +721,7 @@ let%expect_test "linearize" =
     in ( v_3 )
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
-  build_expr' ~f:f_lin |> Expr.to_string_hum |> print_endline;
+  build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
     v_0 ->
@@ -741,10 +740,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
   let read_gradient ~ct_env var ~dims =
     (* TODO: some sort of type inference / add a new variant for "zero"? *)
     Map.find ct_env var
-    |> Option.value_or_thunk ~default:(fun () ->
-      match dims with
-      | None -> raise_s [%message "unexpected unknown dims" (var : Expr.Var.t)]
-      | Some dims -> Tensor.zeros ~dims |> Value.of_tensor)
+    |> Option.value_or_thunk ~default:(fun () -> Tensor.zeros ~dims |> Value.of_tensor)
   in
   let ct_env =
     List.zip_exn (Nonempty_list.to_list expr.return_vals) cotangents
@@ -758,7 +754,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
   let ct_env =
     List.rev expr.equations
     |> List.fold ~init:ct_env ~f:(fun ct_env { var; op } ->
-      let cotangent_dims = Op.map op ~f:Expr.Atom.dims |> Op.infer_optional_dims in
+      let cotangent_dims = Op.map op ~f:Expr.Atom.dims |> Op.infer_dims in
       let cotangent = read_gradient ~ct_env var ~dims:cotangent_dims in
       let ct_env =
         match op with
@@ -783,12 +779,8 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Transpose (Var { var; dims = _ }) ->
           accum_gradient ~ct_env var (Value.transpose cotangent)
         | Sum { value = Var { var; dims }; dims = _; keep_dims = _ } ->
-          Value.broadcast
-            cotangent
-            ~dims:(Option.value_exn dims ~message:"unexpected unknown dims")
-          |> accum_gradient ~ct_env var
+          Value.broadcast cotangent ~dims |> accum_gradient ~ct_env var
         | Broadcast { value = Var { var; dims = from_dims }; dims = to_dims } ->
-          let from_dims = Option.value_exn from_dims ~message:"unexpected unknown dims" in
           let padding_length = Array.length to_dims - Array.length from_dims in
           let non_padded_broadcasts =
             Array.sub to_dims ~pos:padding_length ~len:(Array.length from_dims)

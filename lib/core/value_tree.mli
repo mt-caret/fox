@@ -10,9 +10,10 @@ val to_value_exn : t -> Value0.t
 module Def : sig
   type t [@@deriving sexp_of, compare]
 
-  val leaf : t
+  val leaf : dims:int array -> t
   val node : t String.Map.t -> t
   val length : t -> int
+  val flatten : t -> int array list
 end
 
 val to_def : t -> Def.t

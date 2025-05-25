@@ -32,10 +32,3 @@ module Make_operators_with_dim_check (M : sig
     val eval : value t -> value
     val dims : value -> int array
   end) : Operators_intf.S with type t := M.value
-
-module Make_operators_with_optional_dim_check (M : sig
-    type value
-
-    val eval : value t -> value
-    val dims : value -> int array option
-  end) : Operators_intf.S with type t := M.value

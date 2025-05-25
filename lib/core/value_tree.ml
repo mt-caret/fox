@@ -35,17 +35,6 @@ let to_value_exn : t -> Value0.t = function
   | Node _ as t -> raise_s [%message "Unexpected non-leaf node" (t : t)]
 ;;
 
-module Def = struct
-  type t = unit General.t [@@deriving sexp, compare, quickcheck]
-
-  let leaf = General.leaf ()
-  let node = General.node
-  let create tree = General.map tree ~f:(ignore : Value0.t -> unit)
-  let length = General.length
-end
-
-let to_def = Def.create
-
 let rec flatten : 'value General.t -> 'value list = function
   | Leaf value -> [ value ]
   | Node children ->
@@ -53,11 +42,25 @@ let rec flatten : 'value General.t -> 'value list = function
     |> List.concat_map ~f:(fun (_name, t) -> flatten t)
 ;;
 
+module Def = struct
+  type t = int array General.t [@@deriving sexp, compare, quickcheck]
+
+  let leaf ~dims = General.leaf dims
+  let node = General.node
+  let create tree = General.map tree ~f:Value0.dims
+  let length = General.length
+  let flatten = flatten
+end
+
+let to_def = Def.create
+
 let rec unflatten' values ~(def : Def.t) ~sexp_of_value : _ General.t =
   match def with
-  | Leaf () ->
+  | Leaf dims ->
     (match values with
-     | [ value ] -> Leaf value
+     | [ value ] ->
+       [%test_result: int array] (Value0.dims value) ~expect:dims;
+       Leaf value
      | _ -> raise_s [%message "Expected singleton leaf value" (values : value list)])
   | Node children ->
     let remaining_values, children =
@@ -75,19 +78,5 @@ let rec unflatten' values ~(def : Def.t) ~sexp_of_value : _ General.t =
     String.Map.of_alist_exn children |> node
 ;;
 
+(* TODO: test flatten and unflatten roundtrip *)
 let unflatten values ~def = unflatten' values ~def ~sexp_of_value:[%sexp_of: Value0.t]
-
-let%expect_test "flatten and unflatten roundtrip" =
-  Base_quickcheck.Test.run_exn
-    (module Def)
-    ~f:(fun def ->
-      let counter = ref 0 in
-      let t =
-        General.map def ~f:(fun () ->
-          incr counter;
-          !counter)
-      in
-      let values = flatten t in
-      let t' = unflatten' values ~def ~sexp_of_value:[%sexp_of: int] in
-      [%test_result: int General.t] t' ~expect:t)
-;;

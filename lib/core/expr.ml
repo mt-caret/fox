@@ -16,7 +16,7 @@ module Atom = struct
   type t =
     | Var of
         { var : Var.t
-        ; dims : int array option
+        ; dims : int array
         }
     | Value of Value.t
   [@@deriving sexp_of]
@@ -53,6 +53,7 @@ module Eq = struct
   ;;
 end
 
+(* TODO: add shape information to all vars and equations*)
 type t =
   { parameters : Var.t list
   ; equations : Eq.t list
