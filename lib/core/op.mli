@@ -26,7 +26,7 @@ val to_string : 'a t -> f:('a -> string) -> string
 val infer_dims : int array t -> int array
 val infer_optional_dims : int array option t -> int array option
 
-module Make_operators_with_dim_check (M : sig
+module Make_operators (M : sig
     type value
 
     val eval : value t -> value

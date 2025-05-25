@@ -194,7 +194,7 @@ let%expect_test "sum_single_axis" =
   [%expect {| ((3) (7)) |}]
 ;;
 
-include Op.Make_operators_with_dim_check (struct
+include Op.Make_operators (struct
     type value = t
 
     let eval : t Op.t -> t = function

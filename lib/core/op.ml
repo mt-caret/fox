@@ -162,21 +162,33 @@ module Make_operators (M : sig
     type value
 
     val eval : value t -> value
+    val dims : value -> int array
   end) : Operators_intf.S with type t := M.value = struct
-  let add a b = M.eval (Add (a, b))
-  let sub a b = M.eval (Sub (a, b))
-  let mul a b = M.eval (Mul (a, b))
-  let neg a = M.eval (Neg a)
-  let sin a = M.eval (Sin a)
-  let cos a = M.eval (Cos a)
-  let matmul a b = M.eval (Matmul (a, b))
-  let transpose a = M.eval (Transpose a)
-
-  let sum ?(dims = `All) ?(keep_dims = false) value =
-    M.eval (Sum { value; dims; keep_dims })
+  let eval =
+    fun t ->
+    let inferred_out_dims = map t ~f:M.dims |> infer_dims in
+    let out = M.eval t in
+    [%test_result: int array]
+      (M.dims out)
+      ~expect:inferred_out_dims
+      ~message:"[Op.infer_dims] dims mismatch with actual dims";
+    out
   ;;
 
-  let broadcast value ~dims = M.eval (Broadcast { value; dims })
+  let add a b = eval (Add (a, b))
+  let sub a b = eval (Sub (a, b))
+  let mul a b = eval (Mul (a, b))
+  let neg a = eval (Neg a)
+  let sin a = eval (Sin a)
+  let cos a = eval (Cos a)
+  let matmul a b = eval (Matmul (a, b))
+  let transpose a = eval (Transpose a)
+
+  let sum ?(dims = `All) ?(keep_dims = false) value =
+    eval (Sum { value; dims; keep_dims })
+  ;;
+
+  let broadcast value ~dims = eval (Broadcast { value; dims })
 
   module O = struct
     let ( + ) = add
@@ -185,23 +197,3 @@ module Make_operators (M : sig
     let ( ~- ) = neg
   end
 end
-
-module Make_operators_with_dim_check (M : sig
-    type value
-
-    val eval : value t -> value
-    val dims : value -> int array
-  end) : Operators_intf.S with type t := M.value = Make_operators (struct
-    type value = M.value
-
-    let eval =
-      fun t ->
-      let inferred_out_dims = map t ~f:M.dims |> infer_dims in
-      let out = M.eval t in
-      [%test_result: int array]
-        (M.dims out)
-        ~expect:inferred_out_dims
-        ~message:"[Op.infer_dims] dims mismatch with actual dims";
-      out
-    ;;
-  end)

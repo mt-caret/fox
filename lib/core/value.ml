@@ -21,7 +21,7 @@ let to_tensor_exn (T { value; type_id; dims = _ } as t) : Tensor.t =
 let of_float x = of_tensor (Tensor.of_float x)
 let to_float_exn t : float = to_tensor_exn t |> Tensor.item
 
-include Op.Make_operators_with_dim_check (struct
+include Op.Make_operators (struct
     type value = t
 
     let eval op = Effect.perform (Fox_effect.Op op)
