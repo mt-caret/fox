@@ -125,16 +125,7 @@ let%expect_test "arange" =
   [%expect {| ((0 1 2 3) (4 5 6 7) (8 9 10 11)) |}]
 ;;
 
-let map t ~f =
-  match num_dims t with
-  | 0 -> get t [||] |> f |> of_float
-  | _ ->
-    let t' = create_uninitialized [| length t |] in
-    for i = 0 to length t - 1 do
-      set t' [| i |] (f (get t [| i |]))
-    done;
-    reshape t' ~dims:(dims t)
-;;
+let map t ~f = init (dims t) ~f:(fun index -> f (get t index))
 
 let map2 t1 t2 ~f =
   let dims1 = dims t1 in
@@ -143,14 +134,7 @@ let map2 t1 t2 ~f =
   then
     raise_s
       [%message "Tensor.map2: dims mismatch" (dims1 : int array) (dims2 : int array)];
-  match num_dims t1 with
-  | 0 -> f (get t1 [||]) (get t2 [||]) |> of_float
-  | _ ->
-    let t = create_uninitialized [| length t1 |] in
-    for i = 0 to length t1 - 1 do
-      set t [| i |] (f (get t1 [| i |]) (get t2 [| i |]))
-    done;
-    reshape t ~dims:(dims t1)
+  init dims1 ~f:(fun index -> f (get t1 index) (get t2 index))
 ;;
 
 let sum_single_axis t ~axis ~keep_dim =
@@ -197,10 +181,13 @@ let%expect_test "sum_single_axis" =
 include Op.Make_operators (struct
     type value = t
 
+    let of_float = of_float
+
     let eval : t Op.t -> t = function
       | Add (t1, t2) -> map2 t1 t2 ~f:( +. )
       | Sub (t1, t2) -> map2 t1 t2 ~f:( -. )
       | Mul (t1, t2) -> map2 t1 t2 ~f:( *. )
+      | Div (t1, t2) -> map2 t1 t2 ~f:( /. )
       | Neg t -> map t ~f:( ~-. )
       | Sin t -> map t ~f:Float.sin
       | Cos t -> map t ~f:Float.cos
@@ -288,6 +275,14 @@ let%expect_test "sum" =
   [%expect {| ((10)) |}]
 ;;
 
+let%expect_test "mean" =
+  let t = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  mean t ~keep_dims:false |> sexp_of_t |> print_s;
+  [%expect {| 2.5 |}];
+  mean t ~keep_dims:true |> sexp_of_t |> print_s;
+  [%expect {| ((2.5)) |}]
+;;
+
 let%expect_test "broadcast" =
   let broadcast_and_print t ~dims:dims' =
     let t = broadcast t ~dims:dims' in
@@ -333,7 +328,7 @@ let%expect_test "normal" =
      (1.1461698444484156 -0.27508260258159217))
     |}];
   let t = normal ~dims:[| 10000 |] ~rng () in
-  let mean = item (sum t) /. 10000. in
+  let mean = mean t |> item in
   let std = sqrt (item (sum (map t ~f:(fun x -> (x -. mean) ** 2.))) /. 10000.) in
   print_s [%message "" (mean : float) (std : float)];
   [%expect {| ((mean 0.0026463860836857677) (std 0.98790724584777045)) |}]

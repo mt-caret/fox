@@ -4,6 +4,7 @@ type 'value t =
   | Add of 'value * 'value
   | Sub of 'value * 'value
   | Mul of 'value * 'value
+  | Div of 'value * 'value
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
@@ -25,6 +26,7 @@ let map t ~f =
   | Add (a, b) -> Add (f a, f b)
   | Sub (a, b) -> Sub (f a, f b)
   | Mul (a, b) -> Mul (f a, f b)
+  | Div (a, b) -> Div (f a, f b)
   | Neg a -> Neg (f a)
   | Sin a -> Sin (f a)
   | Cos a -> Cos (f a)
@@ -39,6 +41,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   | Add (a, b) -> M.add a b
   | Sub (a, b) -> M.sub a b
   | Mul (a, b) -> M.mul a b
+  | Div (a, b) -> M.div a b
   | Neg a -> M.neg a
   | Sin a -> M.sin a
   | Cos a -> M.cos a
@@ -53,6 +56,7 @@ let to_string t ~f =
   | Add (a, b) -> [%string "add %{f a} %{f b}"]
   | Sub (a, b) -> [%string "sub %{f a} %{f b}"]
   | Mul (a, b) -> [%string "mul %{f a} %{f b}"]
+  | Div (a, b) -> [%string "div %{f a} %{f b}"]
   | Neg a -> [%string "neg %{f a}"]
   | Sin a -> [%string "sin %{f a}"]
   | Cos a -> [%string "cos %{f a}"]
@@ -78,7 +82,7 @@ let to_string t ~f =
 
 (* TODO: test against operations in tensor.ml *)
 let infer_dims = function
-  | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) ->
+  | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) | Div (dims1, dims2) ->
     [%test_eq: int array] dims1 dims2;
     dims1
   | Neg dims | Sin dims | Cos dims -> dims
@@ -144,6 +148,7 @@ let infer_optional_dims =
   | Add (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:add
   | Sub (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:sub
   | Mul (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:mul
+  | Div (dims1, dims2) -> elementwise_binary_op dims1 dims2 ~f:div
   | Neg dims -> unary_op dims ~f:neg
   | Sin dims -> unary_op dims ~f:sin
   | Cos dims -> unary_op dims ~f:cos
@@ -161,6 +166,7 @@ let infer_optional_dims =
 module Make_operators (M : sig
     type value
 
+    val of_float : float -> value
     val eval : value t -> value
     val dims : value -> int array
   end) : Operators_intf.S with type t := M.value = struct
@@ -178,6 +184,7 @@ module Make_operators (M : sig
   let add a b = eval (Add (a, b))
   let sub a b = eval (Sub (a, b))
   let mul a b = eval (Mul (a, b))
+  let div a b = eval (Div (a, b))
   let neg a = eval (Neg a)
   let sin a = eval (Sin a)
   let cos a = eval (Cos a)
@@ -194,6 +201,17 @@ module Make_operators (M : sig
     let ( + ) = add
     let ( - ) = sub
     let ( * ) = mul
+    let ( / ) = div
     let ( ~- ) = neg
   end
+
+  let mean ?dims ?keep_dims value =
+    let sum = sum ?dims ?keep_dims value in
+    let sum_dims = M.dims sum in
+    let reduction_factor =
+      Array.fold (M.dims value) ~init:1 ~f:( * ) / Array.fold sum_dims ~init:1 ~f:( * )
+    in
+    let reduction_factor = M.of_float (Int.to_float reduction_factor) in
+    O.(sum / broadcast reduction_factor ~dims:sum_dims)
+  ;;
 end

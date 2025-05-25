@@ -31,6 +31,7 @@ let xla_subcomp
         | Add ((a, _), (b, _)) -> Xla.Op.add a b
         | Sub ((a, _), (b, _)) -> Xla.Op.sub a b
         | Mul ((a, _), (b, _)) -> Xla.Op.mul a b
+        | Div ((a, _), (b, _)) -> Xla.Op.div a b
         | Neg (a, _) -> Xla.Op.neg a
         | Sin (a, _) -> Xla.Op.sin a
         | Cos (a, _) -> Xla.Op.cos a

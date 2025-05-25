@@ -100,6 +100,13 @@ module Jvp = struct
             t
             ~primal:Value.O.(a.primal * b.primal)
             ~tangent:Value.O.((a.tangent * b.primal) + (a.primal * b.tangent))
+        | Div (a, b) ->
+          dual_number
+            t
+            ~primal:Value.O.(a.primal / b.primal)
+            ~tangent:
+              Value.O.(
+                ((a.tangent * b.primal) - (a.primal * b.tangent)) / (a.primal * a.primal))
         | Neg a -> dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
         | Sin a ->
           dual_number
@@ -491,6 +498,7 @@ module Partial = struct
         | Add (Known a, Known b) -> Known Value.O.(a + b)
         | Sub (Known a, Known b) -> Known Value.O.(a - b)
         | Mul (Known a, Known b) -> Known Value.O.(a * b)
+        | Div (Known a, Known b) -> Known Value.O.(a / b)
         | Neg (Known a) -> Known Value.O.(-a)
         | Sin (Known a) -> Known (Value.sin a)
         | Cos (Known a) -> Known (Value.cos a)
@@ -501,6 +509,7 @@ module Partial = struct
         | ( Add _
           | Sub _
           | Mul _
+          | Div _
           | Neg _
           | Sin _
           | Cos _
@@ -768,6 +777,8 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
           accum_gradient ~ct_env var (Value.neg cotangent)
         | Mul (Var { var; dims = _ }, Value v) | Mul (Value v, Var { var; dims = _ }) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
+        | Div (Var { var; dims = _ }, Value v) ->
+          accum_gradient ~ct_env var (Value.div v cotangent)
         | Neg (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.neg cotangent)
         | Sin (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.cos cotangent)
         | Cos (Var { var; dims = _ }) ->
@@ -808,6 +819,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Add _
         | Sub _
         | Mul _
+        | Div _
         | Neg _
         | Sin _
         | Cos _

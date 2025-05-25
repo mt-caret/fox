@@ -6,6 +6,7 @@ type t [@@deriving sexp_of, compare]
 
 val type_id : t Type_equal.Id.t
 val dims : t -> int array
+val num_dims : t -> int
 val length : t -> int
 val item : t -> float
 val get : t -> int array -> float

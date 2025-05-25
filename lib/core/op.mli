@@ -4,6 +4,7 @@ type 'value t =
   | Add of 'value * 'value
   | Sub of 'value * 'value
   | Mul of 'value * 'value
+  | Div of 'value * 'value
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
@@ -29,6 +30,7 @@ val infer_optional_dims : int array option t -> int array option
 module Make_operators (M : sig
     type value
 
+    val of_float : float -> value
     val eval : value t -> value
     val dims : value -> int array
   end) : Operators_intf.S with type t := M.value

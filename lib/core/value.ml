@@ -24,6 +24,7 @@ let to_float_exn t : float = to_tensor_exn t |> Tensor.item
 include Op.Make_operators (struct
     type value = t
 
+    let of_float float = of_tensor (Tensor.of_float float)
     let eval op = Effect.perform (Fox_effect.Op op)
     let dims = dims
   end)
