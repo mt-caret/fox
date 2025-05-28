@@ -486,7 +486,7 @@ module Partial = struct
   let create () = { equations = []; name_counter = 0 }
 
   let fresh_var t ~dims : Expr.Var.t =
-    let name = [%string "v_%{t.name_counter#Int}"] in
+    let name = [%string "p_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
     { name; dims }
   ;;
@@ -594,18 +594,18 @@ let%expect_test "partially_apply_expr_flat" =
   print_s ([%sexp_of: Partial_value.t list] partial_values);
   [%expect
     {|
-    ((Known (Tensor 4)) (Unknown ((name v_3) (dims ()))) (Known (Tensor 2))
-     (Unknown ((name v_1) (dims ()))))
+    ((Known (Tensor 4)) (Unknown ((name p_3) (dims ()))) (Known (Tensor 2))
+     (Unknown ((name p_1) (dims ()))))
     |}];
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     x[] ->
-    v_0[] = mul x x
-    v_1[] = add v_0 (Tensor 4)
-    v_2[] = mul (Tensor 4) x
-    v_3[] = add v_2 (Tensor 3)
-    in ( v_3, v_1 )
+    p_0[] = mul x x
+    p_1[] = add p_0 (Tensor 4)
+    p_2[] = mul (Tensor 4) x
+    p_3[] = add p_2 (Tensor 3)
+    in ( p_3, p_1 )
     |}]
 ;;
 
@@ -786,7 +786,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Sub (Value _, Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
         | Mul (Var var, Value v) | Mul (Value v, Var var) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
-        | Div (Var var, Value v) -> accum_gradient ~ct_env var (Value.div v cotangent)
+        | Div (Var var_, Value v) -> accum_gradient ~ct_env var_ (Value.div cotangent v)
         | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
         | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
         | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
@@ -895,10 +895,14 @@ let vjp
     |> Out.t_of_tree
   in
   let f_vjp (cotangents : out) =
+    let cotangents_tree = Out.tree_of_t cotangents in
+    [%test_result: Value_tree.Def.t]
+      (Value_tree.to_def cotangents_tree)
+      ~expect:expr.out_tree_def;
     eval_expr_transposed
       expr
       tangent_vars
-      ~cotangents:(Out.tree_of_t cotangents |> Value_tree.flatten)
+      ~cotangents:(Value_tree.flatten cotangents_tree)
     |> Value_tree.unflatten ~def:primals_tree_def
     |> In.t_of_tree
   in
