@@ -29,6 +29,14 @@ val map2 : t -> t -> f:(float -> float -> float) -> t
 
 include Operators_intf.S with type t := t
 
+val normal
+  :  ?mean:float
+  -> ?std:float
+  -> dims:int array
+  -> rng:Splittable_random.t
+  -> unit
+  -> t
+
 module With_shape : sig
   type nonrec t = t [@@deriving sexp_of]
 end

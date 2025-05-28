@@ -92,6 +92,9 @@ let infer_dims = function
   | Neg dims | Sin dims | Cos dims | Sqrt dims -> dims
   | Matmul (dims1, dims2) ->
     (match dims1, dims2 with
+     | [| n; m |], [| m' |] ->
+       [%test_eq: int] m m';
+       [| n |]
      | [| n; m |], [| m'; k |] ->
        [%test_eq: int] m m';
        [| n; k |]

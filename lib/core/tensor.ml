@@ -195,6 +195,17 @@ include Op.Make_operators (struct
       | Matmul (t1, t2) ->
         (* TODO: support more than just 2D tensors for matmuls and transposes *)
         (match dims t1, dims t2 with
+         | [| n; m |], [| m' |] ->
+           [%test_eq: int] m m';
+           let t = create_uninitialized [| n |] in
+           for i = 0 to n - 1 do
+             let acc = ref 0. in
+             for l = 0 to m - 1 do
+               acc := !acc +. (get t1 [| i; l |] *. get t2 [| l |])
+             done;
+             set t [| i |] !acc
+           done;
+           t
          | [| n; m |], [| m'; k |] ->
            [%test_eq: int] m m';
            let t = create_uninitialized [| n; k |] in
@@ -217,13 +228,7 @@ include Op.Make_operators (struct
       | Transpose t ->
         (match dims t with
          | [| n; m |] ->
-           let t' = create_uninitialized [| m; n |] in
-           for i = 0 to m - 1 do
-             for j = 0 to n - 1 do
-               set t' [| j; i |] (get t [| i; j |])
-             done
-           done;
-           t'
+           init [| m; n |] ~f:(fun index -> get t [| index.(1); index.(0) |])
          | dims ->
            raise_s [%message "transpose: unsupported dimensions" (dims : int array)])
       | Sum { value = t; dims = dims_to_sum; keep_dims } ->
@@ -259,7 +264,10 @@ let%expect_test "matmul" =
   let t1 = of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] in
   let t2 = of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] in
   matmul t1 t2 |> sexp_of_t |> print_s;
-  [%expect {| ((19 22) (43 50)) |}]
+  [%expect {| ((19 22) (43 50)) |}];
+  let t2 = of_list [ 5.; 6. ] in
+  matmul t1 t2 |> sexp_of_t |> print_s;
+  [%expect {| (17 39) |}]
 ;;
 
 let%expect_test "transpose" =
