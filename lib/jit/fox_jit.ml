@@ -17,7 +17,7 @@ let xla_subcomp
   let env = List.zip_exn parameters arguments |> Expr.Var.Map.of_alist_exn in
   let read_atom (atom : Expr.Atom.t) ~env =
     match atom with
-    | Var { var; dims = _ } -> Map.find_exn env var
+    | Var var -> Map.find_exn env var
     | Value value ->
       let tensor = Value.to_tensor_exn value in
       let op = tensor_to_xla_literal tensor |> Xla.Op.constant ~builder in
@@ -62,11 +62,10 @@ let xla_subcomp
   |> Xla.Op.tuple ~builder
 ;;
 
-let xla_callable (expr : Expr.t) ~parameter_dims =
+let xla_callable (expr : Expr.t) =
   let xla_builder = Xla.Builder.create ~name:"xla_call" in
   let xla_params =
-    List.zip_exn expr.parameters parameter_dims
-    |> List.mapi ~f:(fun i (Var name, dims) ->
+    List.mapi expr.parameters ~f:(fun i { name; dims } ->
       (* TODO: right now we assume all parameters are single-element tensors. *)
       Xla.Op.parameter name ~id:i ~ty:F64 ~dims ~builder:xla_builder, dims)
   in
@@ -109,10 +108,7 @@ let jit
     Value_tree.flatten input_tree |> List.map ~f:Value.to_tensor_exn
   in
   let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
-  let xla_callable =
-    xla_callable expr ~parameter_dims:(List.map flattened_input_tensors ~f:Tensor.dims)
-    |> Staged.unstage
-  in
+  let xla_callable = xla_callable expr |> Staged.unstage in
   let output =
     xla_callable flattened_input_tensors
     |> Nonempty_list.to_list

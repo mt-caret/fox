@@ -1,7 +1,11 @@
 open! Core
 
 module Var : sig
-  type t = Var of string [@@deriving compare, sexp]
+  type t =
+    { name : string
+    ; dims : int array
+    }
+  [@@deriving compare, sexp, fields ~getters]
 
   val type_id : t Type_equal.Id.t
 
@@ -10,10 +14,7 @@ end
 
 module Atom : sig
   type t =
-    | Var of
-        { var : Var.t
-        ; dims : int array
-        }
+    | Var of Var.t
     | Value of Value.t
   [@@deriving sexp_of]
 

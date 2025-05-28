@@ -272,16 +272,17 @@ module Staging = struct
 
   let create () = { equations = []; name_counter = 0 }
 
-  let fresh_var t : Expr.Var.t =
+  let fresh_var t ~dims : Expr.Var.t =
     let name = [%string "v_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
-    Var name
+    { name; dims }
   ;;
 
   let handle t ~f =
     try f () with
     | effect Fox_effect.Op op, k ->
-      let binder = fresh_var t in
+      let dims = Op.map op ~f:Value.dims |> Op.infer_dims in
+      let binder = fresh_var t ~dims in
       t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
       let dims = Op.map op ~f:Value.dims |> Op.infer_dims in
       continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
@@ -301,7 +302,7 @@ let build_expr
   let staging = Staging.create () in
   let parameters =
     Value_tree.Def.flatten in_tree_def
-    |> List.map ~f:(fun dims -> Staging.fresh_var staging, dims)
+    |> List.map ~f:(fun dims -> Staging.fresh_var staging ~dims)
   in
   let f, out_tree_def =
     flatten_function (module In) (module Out) ~f ~in_tree_def ~here:[%here]
@@ -309,11 +310,15 @@ let build_expr
   let f = Staged.unstage f in
   let result =
     Staging.handle staging ~f:(fun () ->
-      List.map parameters ~f:(fun (parameter, dims) ->
-        Value.T { value = parameter; type_id = Expr.Var.type_id; dims })
+      List.map parameters ~f:(fun parameter ->
+        Value.T
+          { value = parameter
+          ; type_id = Expr.Var.type_id
+          ; dims = Expr.Var.dims parameter
+          })
       |> f)
   in
-  { parameters = List.map parameters ~f:fst
+  { parameters
   ; equations = List.rev staging.equations
   ; return_vals =
       Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value
@@ -329,9 +334,9 @@ let%expect_test "build_expr" =
   build_expr' ~f:foo ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
-    v_0 ->
-    v_1 = add v_0 (Tensor 3)
-    v_2 = mul v_0 v_1
+    v_0[] ->
+    v_1[] = add v_0 (Tensor 3)
+    v_2[] = mul v_0 v_1
     in ( v_2 )
     |}]
 ;;
@@ -342,8 +347,8 @@ let%expect_test "build_expr2" =
   |> print_endline;
   [%expect
     {|
-    v_0 ->
-    v_1 = mul (Tensor 2) (Tensor 2)
+    v_0[] ->
+    v_1[] = mul (Tensor 2) (Tensor 2)
     in ( v_1 )
     |}]
 ;;
@@ -351,7 +356,7 @@ let%expect_test "build_expr2" =
 let eval_expr_flat (expr : Expr.t) (input : Value.t list) =
   let eval_atom (atom : Expr.Atom.t) ~env =
     match atom with
-    | Var { var; dims = _ } -> Map.find_exn env var
+    | Var var -> Map.find_exn env var
     | Value value -> value
   in
   let env =
@@ -410,45 +415,45 @@ let%expect_test "nth_order_derivative build_expr" =
   print ~n:0;
   [%expect
     {|
-    v_0 ->
-    v_1 = add v_0 (Tensor 3)
-    v_2 = mul v_0 v_1
+    v_0[] ->
+    v_1[] = add v_0 (Tensor 3)
+    v_2[] = mul v_0 v_1
     in ( v_2 )
     |}];
   print ~n:1;
   [%expect
     {|
-    v_0 ->
-    v_1 = add (Tensor 1) (Tensor 0)
-    v_2 = add v_0 (Tensor 3)
-    v_3 = mul v_0 v_1
-    v_4 = mul (Tensor 1) v_2
-    v_5 = add v_4 v_3
-    v_6 = mul v_0 v_2
+    v_0[] ->
+    v_1[] = add (Tensor 1) (Tensor 0)
+    v_2[] = add v_0 (Tensor 3)
+    v_3[] = mul v_0 v_1
+    v_4[] = mul (Tensor 1) v_2
+    v_5[] = add v_4 v_3
+    v_6[] = mul v_0 v_2
     in ( v_5 )
     |}];
   print ~n:2;
   [%expect
     {|
-    v_0 ->
-    v_1 = add (Tensor 0) (Tensor 0)
-    v_2 = add (Tensor 1) (Tensor 0)
-    v_3 = add (Tensor 1) (Tensor 0)
-    v_4 = add v_0 (Tensor 3)
-    v_5 = mul v_0 v_1
-    v_6 = mul (Tensor 1) v_2
-    v_7 = add v_6 v_5
-    v_8 = mul v_0 v_2
-    v_9 = mul (Tensor 1) v_3
-    v_10 = mul (Tensor 0) v_4
-    v_11 = add v_10 v_9
-    v_12 = mul (Tensor 1) v_4
-    v_13 = add v_11 v_7
-    v_14 = add v_12 v_8
-    v_15 = mul v_0 v_3
-    v_16 = mul (Tensor 1) v_4
-    v_17 = add v_16 v_15
-    v_18 = mul v_0 v_4
+    v_0[] ->
+    v_1[] = add (Tensor 0) (Tensor 0)
+    v_2[] = add (Tensor 1) (Tensor 0)
+    v_3[] = add (Tensor 1) (Tensor 0)
+    v_4[] = add v_0 (Tensor 3)
+    v_5[] = mul v_0 v_1
+    v_6[] = mul (Tensor 1) v_2
+    v_7[] = add v_6 v_5
+    v_8[] = mul v_0 v_2
+    v_9[] = mul (Tensor 1) v_3
+    v_10[] = mul (Tensor 0) v_4
+    v_11[] = add v_10 v_9
+    v_12[] = mul (Tensor 1) v_4
+    v_13[] = add v_11 v_7
+    v_14[] = add v_12 v_8
+    v_15[] = mul v_0 v_3
+    v_16[] = mul (Tensor 1) v_4
+    v_17[] = add v_16 v_15
+    v_18[] = mul v_0 v_4
     in ( v_13 )
     |}]
 ;;
@@ -456,20 +461,17 @@ let%expect_test "nth_order_derivative build_expr" =
 module Partial_value = struct
   type t =
     | Known of Value.t
-    | Unknown of
-        { var : Expr.Var.t
-        ; dims : int array
-        }
+    | Unknown of Expr.Var.t
   [@@deriving sexp_of]
 
   let dims = function
     | Known value -> Value.dims value
-    | Unknown { var = _; dims } -> dims
+    | Unknown var -> Expr.Var.dims var
   ;;
 
   let to_atom : t -> Expr.Atom.t = function
     | Known value -> Expr.Atom.of_value value
-    | Unknown { var; dims } -> Var { var; dims }
+    | Unknown var -> Expr.Atom.Var var
   ;;
 
   let type_id = Type_equal.Id.create ~name:"Partial_value" [%sexp_of: t]
@@ -483,10 +485,10 @@ module Partial = struct
 
   let create () = { equations = []; name_counter = 0 }
 
-  let fresh_var t : Expr.Var.t =
+  let fresh_var t ~dims : Expr.Var.t =
     let name = [%string "v_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
-    Var name
+    { name; dims }
   ;;
 
   let lift (T { value = x; type_id; dims = _ } as value : Value.t) : Partial_value.t =
@@ -524,10 +526,11 @@ module Partial = struct
           | Transpose _
           | Sum _
           | Broadcast _ ) as op ->
-          let binder = fresh_var t in
+          let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims in
+          let binder = fresh_var t ~dims in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
-          Unknown { var = binder; dims = Op.infer_dims (Op.map op ~f:Partial_value.dims) }
+          Unknown binder
       in
       continue
         k
@@ -563,14 +566,14 @@ let partially_apply_expr_flat
   let only_unknowns =
     List.filter_map ~f:(function
       | Partial_value.Known _ -> None
-      | Unknown { var; dims } -> Some (var, dims))
+      | Unknown var -> Some var)
   in
   ( outputs
-  , { parameters = only_unknowns inputs |> List.map ~f:fst
+  , { parameters = only_unknowns inputs
     ; equations = List.rev partial.equations
     ; return_vals =
         only_unknowns outputs
-        |> List.map ~f:(fun (var, dims) -> Expr.Atom.Var { var; dims })
+        |> List.map ~f:(fun var -> Expr.Atom.Var var)
         |> Nonempty_list.of_list_exn
     ; out_tree_def
     } )
@@ -580,7 +583,7 @@ let%expect_test "partially_apply_expr_flat" =
   let partial_values, expr =
     Eval.handle ~f:(fun () ->
       partially_apply_expr_flat
-        [ Known (Value.of_float 2.); Unknown { var = Var "x"; dims = [||] } ]
+        [ Known (Value.of_float 2.); Unknown { name = "x"; dims = [||] } ]
         ~f:(function
           | [ x; y ] ->
             let x2 = Value.O.(x * x) in
@@ -591,17 +594,17 @@ let%expect_test "partially_apply_expr_flat" =
   print_s ([%sexp_of: Partial_value.t list] partial_values);
   [%expect
     {|
-    ((Known (Tensor 4)) (Unknown (var (Var v_3)) (dims ())) (Known (Tensor 2))
-     (Unknown (var (Var v_1)) (dims ())))
+    ((Known (Tensor 4)) (Unknown ((name v_3) (dims ()))) (Known (Tensor 2))
+     (Unknown ((name v_1) (dims ()))))
     |}];
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
-    x ->
-    v_0 = mul x x
-    v_1 = add v_0 (Tensor 4)
-    v_2 = mul (Tensor 4) x
-    v_3 = add v_2 (Tensor 3)
+    x[] ->
+    v_0[] = mul x x
+    v_1[] = add v_0 (Tensor 4)
+    v_2[] = mul (Tensor 4) x
+    v_3[] = add v_2 (Tensor 3)
     in ( v_3, v_1 )
     |}]
 ;;
@@ -625,7 +628,7 @@ let linearize
       primals
       (List.mapi primals ~f:(fun i primal ->
          Partial_value.Unknown
-           { var = Var [%string "a_%{i#Int}"]; dims = Partial_value.dims primal }))
+           { name = [%string "a_%{i#Int}"]; dims = Partial_value.dims primal }))
   in
   let outputs, expr =
     partially_apply_expr_flat inputs ~f:(fun inputs ->
@@ -698,9 +701,9 @@ let%expect_test "linearize" =
   build_expr' ~f ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
-    v_0 ->
-    v_1 = sin v_0
-    v_2 = neg v_1
+    v_0[] ->
+    v_1[] = sin v_0
+    v_2[] = neg v_1
     in ( v_2 )
     |}];
   build_expr
@@ -712,12 +715,12 @@ let%expect_test "linearize" =
   |> print_endline;
   [%expect
     {|
-    v_0 v_1 ->
-    v_2 = cos v_0
-    v_3 = mul v_2 v_1
-    v_4 = sin v_0
-    v_5 = neg v_3
-    v_6 = neg v_4
+    v_0[] v_1[] ->
+    v_2[] = cos v_0
+    v_3[] = mul v_2 v_1
+    v_4[] = sin v_0
+    v_5[] = neg v_3
+    v_6[] = neg v_4
     in ( v_6, v_5 )
     |}];
   (* TODO: fix consts? *)
@@ -730,19 +733,19 @@ let%expect_test "linearize" =
   |> print_endline;
   [%expect
     {|
-    v_0 ->
-    v_1 = cos v_0
-    v_2 = sin v_0
-    v_3 = neg v_2
+    v_0[] ->
+    v_1[] = cos v_0
+    v_2[] = sin v_0
+    v_3[] = neg v_2
     in ( v_3 )
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
-    v_0 ->
-    v_1 = mul (Tensor 1) v_0
-    v_2 = neg v_1
+    v_0[] ->
+    v_1[] = mul (Tensor 1) v_0
+    v_2[] = neg v_1
     in ( v_2 )
     |}]
 ;;
@@ -753,10 +756,11 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       | None -> value
       | Some existing -> Value.O.(existing + value))
   in
-  let read_gradient ~ct_env var ~dims =
+  let read_gradient ~ct_env var =
     (* TODO: some sort of type inference / add a new variant for "zero"? *)
     Map.find ct_env var
-    |> Option.value_or_thunk ~default:(fun () -> Tensor.zeros ~dims |> Value.of_tensor)
+    |> Option.value_or_thunk ~default:(fun () ->
+      Tensor.zeros ~dims:(Expr.Var.dims var) |> Value.of_tensor)
   in
   let ct_env =
     List.zip_exn (Nonempty_list.to_list expr.return_vals) cotangents
@@ -765,40 +769,37 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       | Value _ ->
         (* TODO: do we actually want to just ignore constnats? *)
         raise_s [%message "unexpected const return value" (return_val : Expr.Atom.t)]
-      | Var { var; dims = _ } -> accum_gradient ~ct_env var cotangent)
+      | Var var -> accum_gradient ~ct_env var cotangent)
   in
   let ct_env =
     List.rev expr.equations
     |> List.fold ~init:ct_env ~f:(fun ct_env { var; op } ->
-      let cotangent_dims = Op.map op ~f:Expr.Atom.dims |> Op.infer_dims in
-      let cotangent = read_gradient ~ct_env var ~dims:cotangent_dims in
+      let cotangent = read_gradient ~ct_env var in
       let ct_env =
         match op with
-        | Add (Var { var; dims = _ }, Value _) | Add (Value _, Var { var; dims = _ }) ->
+        | Add (Var var, Value _) | Add (Value _, Var var) ->
           accum_gradient ~ct_env var cotangent
-        | Add (Var { var = v1; dims = _ }, Var { var = v2; dims = _ }) ->
+        | Add (Var v1, Var v2) ->
           let ct_env = accum_gradient ~ct_env v1 cotangent in
           accum_gradient ~ct_env v2 cotangent
-        | Sub (Var { var; dims = _ }, Value _) -> accum_gradient ~ct_env var cotangent
-        | Sub (Value _, Var { var; dims = _ }) ->
-          accum_gradient ~ct_env var (Value.neg cotangent)
-        | Mul (Var { var; dims = _ }, Value v) | Mul (Value v, Var { var; dims = _ }) ->
+        | Sub (Var var, Value _) -> accum_gradient ~ct_env var cotangent
+        | Sub (Value _, Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Mul (Var var, Value v) | Mul (Value v, Var var) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
-        | Div (Var { var; dims = _ }, Value v) ->
-          accum_gradient ~ct_env var (Value.div v cotangent)
-        | Neg (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.neg cotangent)
-        | Sin (Var { var; dims = _ }) -> accum_gradient ~ct_env var (Value.cos cotangent)
-        | Cos (Var { var; dims = _ }) ->
-          accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
-        | Matmul (Var { var; dims = _ }, Value v) ->
+        | Div (Var var, Value v) -> accum_gradient ~ct_env var (Value.div v cotangent)
+        | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
+        | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
+        | Matmul (Var var, Value v) ->
           accum_gradient ~ct_env var (Value.matmul cotangent (Value.transpose v))
-        | Matmul (Value v, Var { var; dims = _ }) ->
+        | Matmul (Value v, Var var) ->
           accum_gradient ~ct_env var (Value.matmul (Value.transpose v) cotangent)
-        | Transpose (Var { var; dims = _ }) ->
-          accum_gradient ~ct_env var (Value.transpose cotangent)
-        | Sum { value = Var { var; dims }; dims = _; keep_dims = _ } ->
-          Value.broadcast cotangent ~dims |> accum_gradient ~ct_env var
-        | Broadcast { value = Var { var; dims = from_dims }; dims = to_dims } ->
+        | Transpose (Var var) -> accum_gradient ~ct_env var (Value.transpose cotangent)
+        | Sum { value = Var var; dims = _; keep_dims = _ } ->
+          Value.broadcast cotangent ~dims:(Expr.Var.dims var)
+          |> accum_gradient ~ct_env var
+        | Broadcast { value = Var var; dims = to_dims } ->
+          let from_dims = Expr.Var.dims var in
           let padding_length = Array.length to_dims - Array.length from_dims in
           let non_padded_broadcasts =
             Array.sub to_dims ~pos:padding_length ~len:(Array.length from_dims)
@@ -839,7 +840,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       in
       ct_env)
   in
-  List.map args ~f:(fun (var, dims) -> read_gradient ~ct_env var ~dims)
+  List.map args ~f:(read_gradient ~ct_env)
 ;;
 
 let vjp
@@ -858,12 +859,10 @@ let vjp
   let primals_length = List.length primals in
   let tangent_vars =
     List.mapi primals ~f:(fun i primal ->
-      Expr.Var.Var [%string "a_%{i#Int}"], Partial_value.dims primal)
+      { Expr.Var.name = [%string "a_%{i#Int}"]; dims = Partial_value.dims primal })
   in
   let inputs =
-    List.append
-      primals
-      (List.map tangent_vars ~f:(fun (var, dims) -> Partial_value.Unknown { var; dims }))
+    List.append primals (List.map tangent_vars ~f:(fun var -> Partial_value.Unknown var))
   in
   let outputs, expr =
     partially_apply_expr_flat inputs ~f:(fun inputs ->

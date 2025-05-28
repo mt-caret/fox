@@ -2,40 +2,47 @@ open! Core
 
 module Var = struct
   module T = struct
-    type t = Var of string [@@deriving compare, sexp]
+    type t =
+      { name : string
+      ; dims : int array
+      }
+    [@@deriving compare, sexp, fields ~getters]
   end
 
   include T
   include Comparable.Make_plain (T)
 
   let type_id = Type_equal.Id.create ~name:"Var" [%sexp_of: t]
-  let to_string (Var name) = name
+
+  let to_string { name; dims } =
+    let dims =
+      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:","
+    in
+    [%string "%{name}[%{dims}]"]
+  ;;
 end
 
 module Atom = struct
   type t =
-    | Var of
-        { var : Var.t
-        ; dims : int array
-        }
+    | Var of Var.t
     | Value of Value.t
   [@@deriving sexp_of]
 
   let to_string = function
-    | Var { var; dims = _ } ->
-      (* TODO: print dims *)
-      Var.to_string var
+    | Var { name; dims = _ } -> name
     | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
   ;;
 
   let of_value (T { value = x; type_id; dims } as value : Value.t) : t =
     match Type_equal.Id.same_witness type_id Var.type_id with
-    | Some T -> Var { var = x; dims }
+    | Some T ->
+      [%test_eq: int array] dims (Var.dims x);
+      Var x
     | None -> Value value
   ;;
 
   let dims = function
-    | Var { var = _; dims } -> dims
+    | Var var -> Var.dims var
     | Value value -> Value.dims value
   ;;
 end
@@ -63,9 +70,7 @@ type t =
 [@@deriving sexp_of]
 
 let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
-  let parameters =
-    String.concat ~sep:" " (List.map parameters ~f:(fun (Var name) -> name))
-  in
+  let parameters = String.concat ~sep:" " (List.map parameters ~f:Var.to_string) in
   let equations = String.concat ~sep:"\n" (List.map equations ~f:Eq.to_string) in
   let return_vals =
     Nonempty_list.to_list return_vals
