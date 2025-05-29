@@ -85,6 +85,22 @@ module Jvp = struct
     | effect Fox_effect.Op op, k ->
       let result =
         match Op.map op ~f:(lift t) with
+        | Neg a -> dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
+        | Sin a ->
+          dual_number
+            t
+            ~primal:(Value.sin a.primal)
+            ~tangent:Value.O.(Value.cos a.primal * a.tangent)
+        | Cos a ->
+          dual_number
+            t
+            ~primal:(Value.cos a.primal)
+            ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
+        | Sqrt a ->
+          dual_number
+            t
+            ~primal:(Value.sqrt a.primal)
+            ~tangent:(Value.div a.tangent (Value.scale (Value.sqrt a.primal) 2.))
         | Add (a, b) ->
           dual_number
             t
@@ -107,22 +123,6 @@ module Jvp = struct
             ~tangent:
               Value.O.(
                 ((a.tangent * b.primal) - (a.primal * b.tangent)) / (a.primal * a.primal))
-        | Neg a -> dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
-        | Sin a ->
-          dual_number
-            t
-            ~primal:(Value.sin a.primal)
-            ~tangent:Value.O.(Value.cos a.primal * a.tangent)
-        | Cos a ->
-          dual_number
-            t
-            ~primal:(Value.cos a.primal)
-            ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
-        | Sqrt a ->
-          dual_number
-            t
-            ~primal:(Value.sqrt a.primal)
-            ~tangent:(Value.div a.tangent (Value.scale (Value.sqrt a.primal) 2.))
         | Matmul (a, b) ->
           dual_number
             t
@@ -502,26 +502,26 @@ module Partial = struct
     | effect Fox_effect.Op op, k ->
       let result : Partial_value.t =
         match Op.map op ~f:lift with
-        | Add (Known a, Known b) -> Known Value.O.(a + b)
-        | Sub (Known a, Known b) -> Known Value.O.(a - b)
-        | Mul (Known a, Known b) -> Known Value.O.(a * b)
-        | Div (Known a, Known b) -> Known Value.O.(a / b)
         | Neg (Known a) -> Known Value.O.(-a)
         | Sin (Known a) -> Known (Value.sin a)
         | Cos (Known a) -> Known (Value.cos a)
         | Sqrt (Known a) -> Known (Value.sqrt a)
+        | Add (Known a, Known b) -> Known Value.O.(a + b)
+        | Sub (Known a, Known b) -> Known Value.O.(a - b)
+        | Mul (Known a, Known b) -> Known Value.O.(a * b)
+        | Div (Known a, Known b) -> Known Value.O.(a / b)
         | Matmul (Known a, Known b) -> Known (Value.matmul a b)
         | Transpose (Known a) -> Known (Value.transpose a)
         | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
         | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
-        | ( Add _
-          | Sub _
-          | Mul _
-          | Div _
-          | Neg _
+        | ( Neg _
           | Sin _
           | Cos _
           | Sqrt _
+          | Add _
+          | Sub _
+          | Mul _
+          | Div _
           | Matmul _
           | Transpose _
           | Sum _
@@ -777,6 +777,9 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       let cotangent = read_gradient ~ct_env var in
       let ct_env =
         match op with
+        | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
+        | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
         | Add (Var var, Value _) | Add (Value _, Var var) ->
           accum_gradient ~ct_env var cotangent
         | Add (Var v1, Var v2) ->
@@ -787,9 +790,6 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Mul (Var var, Value v) | Mul (Value v, Var var) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
         | Div (Var var_, Value v) -> accum_gradient ~ct_env var_ (Value.div cotangent v)
-        | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
-        | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
-        | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
         | Matmul (Var var, Value v) ->
           accum_gradient ~ct_env var (Value.matmul cotangent (Value.transpose v))
         | Matmul (Value v, Var var) ->
@@ -824,14 +824,14 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
                ~dims:(`Just non_padded_broadcasts)
                ~keep_dims:true)
           |> accum_gradient ~ct_env var
-        | Add _
-        | Sub _
-        | Mul _
-        | Div _
         | Neg _
         | Sin _
         | Cos _
         | Sqrt _
+        | Add _
+        | Sub _
+        | Mul _
+        | Div _
         | Matmul _
         | Transpose _
         | Sum _

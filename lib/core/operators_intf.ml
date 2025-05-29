@@ -3,14 +3,14 @@ open! Core
 module type S = sig
   type t
 
-  val add : t -> t -> t
-  val sub : t -> t -> t
-  val mul : t -> t -> t
-  val div : t -> t -> t
   val neg : t -> t
   val sin : t -> t
   val cos : t -> t
   val sqrt : t -> t
+  val add : t -> t -> t
+  val sub : t -> t -> t
+  val mul : t -> t -> t
+  val div : t -> t -> t
   val matmul : t -> t -> t
   val transpose : t -> t
   val sum : ?dims:[ `Just of int array | `All ] -> ?keep_dims:bool -> t -> t
@@ -34,10 +34,10 @@ module type S = sig
   val scale : t -> float -> t
 
   module O : sig
+    val ( ~- ) : t -> t
     val ( + ) : t -> t -> t
     val ( - ) : t -> t -> t
     val ( * ) : t -> t -> t
     val ( / ) : t -> t -> t
-    val ( ~- ) : t -> t
   end
 end

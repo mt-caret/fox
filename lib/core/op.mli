@@ -1,14 +1,14 @@
 open! Core
 
 type 'value t =
-  | Add of 'value * 'value
-  | Sub of 'value * 'value
-  | Mul of 'value * 'value
-  | Div of 'value * 'value
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
   | Sqrt of 'value
+  | Add of 'value * 'value
+  | Sub of 'value * 'value
+  | Mul of 'value * 'value
+  | Div of 'value * 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
   | Sum of

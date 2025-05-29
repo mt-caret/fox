@@ -1,14 +1,14 @@
 open! Core
 
 type 'value t =
-  | Add of 'value * 'value
-  | Sub of 'value * 'value
-  | Mul of 'value * 'value
-  | Div of 'value * 'value
   | Neg of 'value
   | Sin of 'value
   | Cos of 'value
   | Sqrt of 'value
+  | Add of 'value * 'value
+  | Sub of 'value * 'value
+  | Mul of 'value * 'value
+  | Div of 'value * 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
   | Sum of
@@ -24,14 +24,14 @@ type 'value t =
 
 let map t ~f =
   match t with
-  | Add (a, b) -> Add (f a, f b)
-  | Sub (a, b) -> Sub (f a, f b)
-  | Mul (a, b) -> Mul (f a, f b)
-  | Div (a, b) -> Div (f a, f b)
   | Neg a -> Neg (f a)
   | Sin a -> Sin (f a)
   | Cos a -> Cos (f a)
   | Sqrt a -> Sqrt (f a)
+  | Add (a, b) -> Add (f a, f b)
+  | Sub (a, b) -> Sub (f a, f b)
+  | Mul (a, b) -> Mul (f a, f b)
+  | Div (a, b) -> Div (f a, f b)
   | Matmul (a, b) -> Matmul (f a, f b)
   | Transpose a -> Transpose (f a)
   | Sum { value; dims; keep_dims } -> Sum { value = f value; dims; keep_dims }
@@ -40,14 +40,14 @@ let map t ~f =
 
 let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   match t with
-  | Add (a, b) -> M.add a b
-  | Sub (a, b) -> M.sub a b
-  | Mul (a, b) -> M.mul a b
-  | Div (a, b) -> M.div a b
   | Neg a -> M.neg a
   | Sin a -> M.sin a
   | Cos a -> M.cos a
   | Sqrt a -> M.sqrt a
+  | Add (a, b) -> M.add a b
+  | Sub (a, b) -> M.sub a b
+  | Mul (a, b) -> M.mul a b
+  | Div (a, b) -> M.div a b
   | Matmul (a, b) -> M.matmul a b
   | Transpose a -> M.transpose a
   | Sum { value; dims; keep_dims } -> M.sum value ~dims ~keep_dims
@@ -56,14 +56,14 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
 
 let to_string t ~f =
   match t with
-  | Add (a, b) -> [%string "add %{f a} %{f b}"]
-  | Sub (a, b) -> [%string "sub %{f a} %{f b}"]
-  | Mul (a, b) -> [%string "mul %{f a} %{f b}"]
-  | Div (a, b) -> [%string "div %{f a} %{f b}"]
   | Neg a -> [%string "neg %{f a}"]
   | Sin a -> [%string "sin %{f a}"]
   | Cos a -> [%string "cos %{f a}"]
   | Sqrt a -> [%string "sqrt %{f a}"]
+  | Add (a, b) -> [%string "add %{f a} %{f b}"]
+  | Sub (a, b) -> [%string "sub %{f a} %{f b}"]
+  | Mul (a, b) -> [%string "mul %{f a} %{f b}"]
+  | Div (a, b) -> [%string "div %{f a} %{f b}"]
   | Matmul (a, b) -> [%string "matmul %{f a} %{f b}"]
   | Transpose a -> [%string "transpose %{f a}"]
   | Sum { value; dims; keep_dims } ->
@@ -86,10 +86,10 @@ let to_string t ~f =
 
 (* TODO: test against operations in tensor.ml *)
 let infer_dims = function
+  | Neg dims | Sin dims | Cos dims | Sqrt dims -> dims
   | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) | Div (dims1, dims2) ->
     [%test_eq: int array] dims1 dims2;
     dims1
-  | Neg dims | Sin dims | Cos dims | Sqrt dims -> dims
   | Matmul (dims1, dims2) ->
     (match dims1, dims2 with
      | [| n; m |], [| m' |] ->
@@ -162,14 +162,14 @@ module Make_operators (M : sig
     out
   ;;
 
-  let add a b = eval (Add (a, b))
-  let sub a b = eval (Sub (a, b))
-  let mul a b = eval (Mul (a, b))
-  let div a b = eval (Div (a, b))
   let neg a = eval (Neg a)
   let sin a = eval (Sin a)
   let cos a = eval (Cos a)
   let sqrt a = eval (Sqrt a)
+  let add a b = eval (Add (a, b))
+  let sub a b = eval (Sub (a, b))
+  let mul a b = eval (Mul (a, b))
+  let div a b = eval (Div (a, b))
   let matmul a b = eval (Matmul (a, b))
   let transpose a = eval (Transpose a)
 
@@ -180,11 +180,11 @@ module Make_operators (M : sig
   let broadcast value ~dims = eval (Broadcast { value; dims })
 
   module O = struct
+    let ( ~- ) = neg
     let ( + ) = add
     let ( - ) = sub
     let ( * ) = mul
     let ( / ) = div
-    let ( ~- ) = neg
   end
 
   let scale value float = O.(value * broadcast (M.of_float float) ~dims:(M.dims value))

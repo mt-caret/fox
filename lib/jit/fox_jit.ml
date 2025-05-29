@@ -28,14 +28,14 @@ let xla_subcomp
       let op = Op.map op ~f:(read_atom ~env) in
       let xla_op =
         match op with
-        | Add ((a, _), (b, _)) -> Xla.Op.add a b
-        | Sub ((a, _), (b, _)) -> Xla.Op.sub a b
-        | Mul ((a, _), (b, _)) -> Xla.Op.mul a b
-        | Div ((a, _), (b, _)) -> Xla.Op.div a b
         | Neg (a, _) -> Xla.Op.neg a
         | Sin (a, _) -> Xla.Op.sin a
         | Cos (a, _) -> Xla.Op.cos a
         | Sqrt (a, _) -> Xla.Op.sqrt a
+        | Add ((a, _), (b, _)) -> Xla.Op.add a b
+        | Sub ((a, _), (b, _)) -> Xla.Op.sub a b
+        | Mul ((a, _), (b, _)) -> Xla.Op.mul a b
+        | Div ((a, _), (b, _)) -> Xla.Op.div a b
         | Matmul ((a, _), (b, _)) -> Xla.Op.matmul a b
         | Transpose (a, _) ->
           (* TODO: support arbitrary dimensions *)
