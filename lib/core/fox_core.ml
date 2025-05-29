@@ -102,22 +102,22 @@ module Jvp = struct
             t
             ~primal:(Value.sqrt a.primal)
             ~tangent:(Value.div a.tangent (Value.scale (Value.sqrt a.primal) 2.))
-        | Add (a, b) ->
+        | Binary (Add, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal + b.primal)
             ~tangent:Value.O.(a.tangent + b.tangent)
-        | Sub (a, b) ->
+        | Binary (Sub, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal - b.primal)
             ~tangent:Value.O.(a.tangent - b.tangent)
-        | Mul (a, b) ->
+        | Binary (Mul, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal * b.primal)
             ~tangent:Value.O.((a.tangent * b.primal) + (a.primal * b.tangent))
-        | Div (a, b) ->
+        | Binary (Div, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal / b.primal)
@@ -504,17 +504,15 @@ module Partial = struct
       let result : Partial_value.t =
         match Op.map op ~f:lift with
         | Unary (kind, Known a) -> Known (Op.eval (module Value) (Unary (kind, a)))
-        | Add (Known a, Known b) -> Known Value.O.(a + b)
-        | Sub (Known a, Known b) -> Known Value.O.(a - b)
-        | Mul (Known a, Known b) -> Known Value.O.(a * b)
-        | Div (Known a, Known b) -> Known Value.O.(a / b)
+        | Binary (kind, Known a, Known b) ->
+          Known (Op.eval (module Value) (Binary (kind, a, b)))
         | Matmul (Known a, Known b) -> Known (Value.matmul a b)
         | Transpose (Known a) -> Known (Value.transpose a)
         | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
         | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
         | ( Unary ((Neg | Sin | Cos | Sqrt), _)
-          | Add _ | Sub _ | Mul _ | Div _ | Matmul _ | Transpose _ | Sum _ | Broadcast _
-            ) as op ->
+          | Binary ((Add | Sub | Mul | Div), _, _)
+          | Matmul _ | Transpose _ | Sum _ | Broadcast _ ) as op ->
           let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims in
           let binder = fresh_var t ~dims in
           t.equations
@@ -770,16 +768,18 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Unary (Sin, Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
         | Unary (Cos, Var var) ->
           accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
-        | Add (Var var, Value _) | Add (Value _, Var var) ->
+        | Binary (Add, Var var, Value _) | Binary (Add, Value _, Var var) ->
           accum_gradient ~ct_env var cotangent
-        | Add (Var v1, Var v2) ->
+        | Binary (Add, Var v1, Var v2) ->
           let ct_env = accum_gradient ~ct_env v1 cotangent in
           accum_gradient ~ct_env v2 cotangent
-        | Sub (Var var, Value _) -> accum_gradient ~ct_env var cotangent
-        | Sub (Value _, Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
-        | Mul (Var var, Value v) | Mul (Value v, Var var) ->
+        | Binary (Sub, Var var, Value _) -> accum_gradient ~ct_env var cotangent
+        | Binary (Sub, Value _, Var var) ->
+          accum_gradient ~ct_env var (Value.neg cotangent)
+        | Binary (Mul, Var var, Value v) | Binary (Mul, Value v, Var var) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
-        | Div (Var var_, Value v) -> accum_gradient ~ct_env var_ (Value.div cotangent v)
+        | Binary (Div, Var var, Value v) ->
+          accum_gradient ~ct_env var (Value.div cotangent v)
         | Matmul (Var var, Value v) ->
           accum_gradient ~ct_env var (Value.matmul cotangent (Value.transpose v))
         | Matmul (Value v, Var var) ->
@@ -815,7 +815,8 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
                ~keep_dims:true)
           |> accum_gradient ~ct_env var
         | Unary ((Neg | Sin | Cos | Sqrt), _)
-        | Add _ | Sub _ | Mul _ | Div _ | Matmul _ | Transpose _ | Sum _ | Broadcast _ ->
+        | Binary ((Add | Sub | Mul | Div), _, _)
+        | Matmul _ | Transpose _ | Sum _ | Broadcast _ ->
           raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
       in
       ct_env)

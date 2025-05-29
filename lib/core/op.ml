@@ -11,12 +11,20 @@ module Unary = struct
   let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
 end
 
+module Binary = struct
+  type t =
+    | Add
+    | Sub
+    | Mul
+    | Div
+  [@@deriving sexp, enumerate]
+
+  let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
+end
+
 type 'value t =
   | Unary of Unary.t * 'value
-  | Add of 'value * 'value
-  | Sub of 'value * 'value
-  | Mul of 'value * 'value
-  | Div of 'value * 'value
+  | Binary of Binary.t * 'value * 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
   | Sum of
@@ -33,10 +41,7 @@ type 'value t =
 let map t ~f =
   match t with
   | Unary (kind, a) -> Unary (kind, f a)
-  | Add (a, b) -> Add (f a, f b)
-  | Sub (a, b) -> Sub (f a, f b)
-  | Mul (a, b) -> Mul (f a, f b)
-  | Div (a, b) -> Div (f a, f b)
+  | Binary (kind, a, b) -> Binary (kind, f a, f b)
   | Matmul (a, b) -> Matmul (f a, f b)
   | Transpose a -> Transpose (f a)
   | Sum { value; dims; keep_dims } -> Sum { value = f value; dims; keep_dims }
@@ -54,10 +59,15 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
       | Sqrt -> M.sqrt
     in
     f a
-  | Add (a, b) -> M.add a b
-  | Sub (a, b) -> M.sub a b
-  | Mul (a, b) -> M.mul a b
-  | Div (a, b) -> M.div a b
+  | Binary (kind, a, b) ->
+    let f =
+      match kind with
+      | Add -> M.add
+      | Sub -> M.sub
+      | Mul -> M.mul
+      | Div -> M.div
+    in
+    f a b
   | Matmul (a, b) -> M.matmul a b
   | Transpose a -> M.transpose a
   | Sum { value; dims; keep_dims } -> M.sum value ~dims ~keep_dims
@@ -67,10 +77,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
 let to_string t ~f =
   match t with
   | Unary (kind, a) -> [%string "%{kind#Unary} %{f a}"]
-  | Add (a, b) -> [%string "add %{f a} %{f b}"]
-  | Sub (a, b) -> [%string "sub %{f a} %{f b}"]
-  | Mul (a, b) -> [%string "mul %{f a} %{f b}"]
-  | Div (a, b) -> [%string "div %{f a} %{f b}"]
+  | Binary (kind, a, b) -> [%string "%{kind#Binary} %{f a} %{f b}"]
   | Matmul (a, b) -> [%string "matmul %{f a} %{f b}"]
   | Transpose a -> [%string "transpose %{f a}"]
   | Sum { value; dims; keep_dims } ->
@@ -94,7 +101,7 @@ let to_string t ~f =
 (* TODO: test against operations in tensor.ml *)
 let infer_dims = function
   | Unary ((Neg | Sin | Cos | Sqrt), dims) -> dims
-  | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) | Div (dims1, dims2) ->
+  | Binary ((Add | Sub | Mul | Div), dims1, dims2) ->
     [%test_eq: int array] dims1 dims2;
     dims1
   | Matmul (dims1, dims2) ->
@@ -173,10 +180,10 @@ module Make_operators (M : sig
   let sin a = eval (Unary (Sin, a))
   let cos a = eval (Unary (Cos, a))
   let sqrt a = eval (Unary (Sqrt, a))
-  let add a b = eval (Add (a, b))
-  let sub a b = eval (Sub (a, b))
-  let mul a b = eval (Mul (a, b))
-  let div a b = eval (Div (a, b))
+  let add a b = eval (Binary (Add, a, b))
+  let sub a b = eval (Binary (Sub, a, b))
+  let mul a b = eval (Binary (Mul, a, b))
+  let div a b = eval (Binary (Div, a, b))
   let matmul a b = eval (Matmul (a, b))
   let transpose a = eval (Transpose a)
 

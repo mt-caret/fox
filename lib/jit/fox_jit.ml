@@ -37,10 +37,15 @@ let xla_subcomp
             | Sqrt -> Xla.Op.sqrt
           in
           f a
-        | Add ((a, _), (b, _)) -> Xla.Op.add a b
-        | Sub ((a, _), (b, _)) -> Xla.Op.sub a b
-        | Mul ((a, _), (b, _)) -> Xla.Op.mul a b
-        | Div ((a, _), (b, _)) -> Xla.Op.div a b
+        | Binary (kind, (a, _), (b, _)) ->
+          let f =
+            match kind with
+            | Add -> Xla.Op.add
+            | Sub -> Xla.Op.sub
+            | Mul -> Xla.Op.mul
+            | Div -> Xla.Op.div
+          in
+          f a b
         | Matmul ((a, _), (b, _)) -> Xla.Op.matmul a b
         | Transpose (a, _) ->
           (* TODO: support arbitrary dimensions *)

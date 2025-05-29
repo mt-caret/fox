@@ -9,12 +9,18 @@ module Unary : sig
   [@@deriving sexp, enumerate]
 end
 
+module Binary : sig
+  type t =
+    | Add
+    | Sub
+    | Mul
+    | Div
+  [@@deriving sexp, enumerate]
+end
+
 type 'value t =
   | Unary of Unary.t * 'value
-  | Add of 'value * 'value
-  | Sub of 'value * 'value
-  | Mul of 'value * 'value
-  | Div of 'value * 'value
+  | Binary of Binary.t * 'value * 'value
   | Matmul of 'value * 'value
   | Transpose of 'value
   | Sum of

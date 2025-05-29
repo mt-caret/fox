@@ -193,10 +193,15 @@ include Op.Make_operators (struct
           | Sqrt -> Float.sqrt
         in
         map t ~f
-      | Add (t1, t2) -> map2 t1 t2 ~f:( +. )
-      | Sub (t1, t2) -> map2 t1 t2 ~f:( -. )
-      | Mul (t1, t2) -> map2 t1 t2 ~f:( *. )
-      | Div (t1, t2) -> map2 t1 t2 ~f:( /. )
+      | Binary (kind, t1, t2) ->
+        let f =
+          match kind with
+          | Add -> ( +. )
+          | Sub -> ( -. )
+          | Mul -> ( *. )
+          | Div -> ( /. )
+        in
+        map2 t1 t2 ~f
       | Matmul (t1, t2) ->
         (* TODO: support more than just 2D tensors for matmuls and transposes *)
         (match dims t1, dims t2 with
