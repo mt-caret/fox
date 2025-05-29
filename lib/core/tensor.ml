@@ -184,14 +184,19 @@ include Op.Make_operators (struct
     let of_float = of_float
 
     let eval : t Op.t -> t = function
+      | Unary (kind, t) ->
+        let f =
+          match kind with
+          | Neg -> Float.neg
+          | Sin -> Float.sin
+          | Cos -> Float.cos
+          | Sqrt -> Float.sqrt
+        in
+        map t ~f
       | Add (t1, t2) -> map2 t1 t2 ~f:( +. )
       | Sub (t1, t2) -> map2 t1 t2 ~f:( -. )
       | Mul (t1, t2) -> map2 t1 t2 ~f:( *. )
       | Div (t1, t2) -> map2 t1 t2 ~f:( /. )
-      | Neg t -> map t ~f:( ~-. )
-      | Sin t -> map t ~f:Float.sin
-      | Cos t -> map t ~f:Float.cos
-      | Sqrt t -> map t ~f:Float.sqrt
       | Matmul (t1, t2) ->
         (* TODO: support more than just 2D tensors for matmuls and transposes *)
         (match dims t1, dims t2 with

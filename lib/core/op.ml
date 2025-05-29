@@ -1,10 +1,18 @@
 open! Core
 
+module Unary = struct
+  type t =
+    | Neg
+    | Sin
+    | Cos
+    | Sqrt
+  [@@deriving sexp, enumerate]
+
+  let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
+end
+
 type 'value t =
-  | Neg of 'value
-  | Sin of 'value
-  | Cos of 'value
-  | Sqrt of 'value
+  | Unary of Unary.t * 'value
   | Add of 'value * 'value
   | Sub of 'value * 'value
   | Mul of 'value * 'value
@@ -24,10 +32,7 @@ type 'value t =
 
 let map t ~f =
   match t with
-  | Neg a -> Neg (f a)
-  | Sin a -> Sin (f a)
-  | Cos a -> Cos (f a)
-  | Sqrt a -> Sqrt (f a)
+  | Unary (kind, a) -> Unary (kind, f a)
   | Add (a, b) -> Add (f a, f b)
   | Sub (a, b) -> Sub (f a, f b)
   | Mul (a, b) -> Mul (f a, f b)
@@ -40,10 +45,15 @@ let map t ~f =
 
 let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   match t with
-  | Neg a -> M.neg a
-  | Sin a -> M.sin a
-  | Cos a -> M.cos a
-  | Sqrt a -> M.sqrt a
+  | Unary (kind, a) ->
+    let f =
+      match kind with
+      | Neg -> M.neg
+      | Sin -> M.sin
+      | Cos -> M.cos
+      | Sqrt -> M.sqrt
+    in
+    f a
   | Add (a, b) -> M.add a b
   | Sub (a, b) -> M.sub a b
   | Mul (a, b) -> M.mul a b
@@ -56,10 +66,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
 
 let to_string t ~f =
   match t with
-  | Neg a -> [%string "neg %{f a}"]
-  | Sin a -> [%string "sin %{f a}"]
-  | Cos a -> [%string "cos %{f a}"]
-  | Sqrt a -> [%string "sqrt %{f a}"]
+  | Unary (kind, a) -> [%string "%{kind#Unary} %{f a}"]
   | Add (a, b) -> [%string "add %{f a} %{f b}"]
   | Sub (a, b) -> [%string "sub %{f a} %{f b}"]
   | Mul (a, b) -> [%string "mul %{f a} %{f b}"]
@@ -86,7 +93,7 @@ let to_string t ~f =
 
 (* TODO: test against operations in tensor.ml *)
 let infer_dims = function
-  | Neg dims | Sin dims | Cos dims | Sqrt dims -> dims
+  | Unary ((Neg | Sin | Cos | Sqrt), dims) -> dims
   | Add (dims1, dims2) | Sub (dims1, dims2) | Mul (dims1, dims2) | Div (dims1, dims2) ->
     [%test_eq: int array] dims1 dims2;
     dims1
@@ -162,10 +169,10 @@ module Make_operators (M : sig
     out
   ;;
 
-  let neg a = eval (Neg a)
-  let sin a = eval (Sin a)
-  let cos a = eval (Cos a)
-  let sqrt a = eval (Sqrt a)
+  let neg a = eval (Unary (Neg, a))
+  let sin a = eval (Unary (Sin, a))
+  let cos a = eval (Unary (Cos, a))
+  let sqrt a = eval (Unary (Sqrt, a))
   let add a b = eval (Add (a, b))
   let sub a b = eval (Sub (a, b))
   let mul a b = eval (Mul (a, b))

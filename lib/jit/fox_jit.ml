@@ -28,10 +28,15 @@ let xla_subcomp
       let op = Op.map op ~f:(read_atom ~env) in
       let xla_op =
         match op with
-        | Neg (a, _) -> Xla.Op.neg a
-        | Sin (a, _) -> Xla.Op.sin a
-        | Cos (a, _) -> Xla.Op.cos a
-        | Sqrt (a, _) -> Xla.Op.sqrt a
+        | Unary (kind, (a, _)) ->
+          let f =
+            match kind with
+            | Neg -> Xla.Op.neg
+            | Sin -> Xla.Op.sin
+            | Cos -> Xla.Op.cos
+            | Sqrt -> Xla.Op.sqrt
+          in
+          f a
         | Add ((a, _), (b, _)) -> Xla.Op.add a b
         | Sub ((a, _), (b, _)) -> Xla.Op.sub a b
         | Mul ((a, _), (b, _)) -> Xla.Op.mul a b

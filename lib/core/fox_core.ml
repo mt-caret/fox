@@ -85,18 +85,19 @@ module Jvp = struct
     | effect Fox_effect.Op op, k ->
       let result =
         match Op.map op ~f:(lift t) with
-        | Neg a -> dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
-        | Sin a ->
+        | Unary (Neg, a) ->
+          dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
+        | Unary (Sin, a) ->
           dual_number
             t
             ~primal:(Value.sin a.primal)
             ~tangent:Value.O.(Value.cos a.primal * a.tangent)
-        | Cos a ->
+        | Unary (Cos, a) ->
           dual_number
             t
             ~primal:(Value.cos a.primal)
             ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
-        | Sqrt a ->
+        | Unary (Sqrt, a) ->
           dual_number
             t
             ~primal:(Value.sqrt a.primal)
@@ -502,10 +503,7 @@ module Partial = struct
     | effect Fox_effect.Op op, k ->
       let result : Partial_value.t =
         match Op.map op ~f:lift with
-        | Neg (Known a) -> Known Value.O.(-a)
-        | Sin (Known a) -> Known (Value.sin a)
-        | Cos (Known a) -> Known (Value.cos a)
-        | Sqrt (Known a) -> Known (Value.sqrt a)
+        | Unary (kind, Known a) -> Known (Op.eval (module Value) (Unary (kind, a)))
         | Add (Known a, Known b) -> Known Value.O.(a + b)
         | Sub (Known a, Known b) -> Known Value.O.(a - b)
         | Mul (Known a, Known b) -> Known Value.O.(a * b)
@@ -514,18 +512,9 @@ module Partial = struct
         | Transpose (Known a) -> Known (Value.transpose a)
         | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
         | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
-        | ( Neg _
-          | Sin _
-          | Cos _
-          | Sqrt _
-          | Add _
-          | Sub _
-          | Mul _
-          | Div _
-          | Matmul _
-          | Transpose _
-          | Sum _
-          | Broadcast _ ) as op ->
+        | ( Unary ((Neg | Sin | Cos | Sqrt), _)
+          | Add _ | Sub _ | Mul _ | Div _ | Matmul _ | Transpose _ | Sum _ | Broadcast _
+            ) as op ->
           let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims in
           let binder = fresh_var t ~dims in
           t.equations
@@ -777,9 +766,10 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
       let cotangent = read_gradient ~ct_env var in
       let ct_env =
         match op with
-        | Neg (Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
-        | Sin (Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
-        | Cos (Var var) -> accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
+        | Unary (Neg, Var var) -> accum_gradient ~ct_env var (Value.neg cotangent)
+        | Unary (Sin, Var var) -> accum_gradient ~ct_env var (Value.cos cotangent)
+        | Unary (Cos, Var var) ->
+          accum_gradient ~ct_env var (Value.neg (Value.sin cotangent))
         | Add (Var var, Value _) | Add (Value _, Var var) ->
           accum_gradient ~ct_env var cotangent
         | Add (Var v1, Var v2) ->
@@ -824,18 +814,8 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
                ~dims:(`Just non_padded_broadcasts)
                ~keep_dims:true)
           |> accum_gradient ~ct_env var
-        | Neg _
-        | Sin _
-        | Cos _
-        | Sqrt _
-        | Add _
-        | Sub _
-        | Mul _
-        | Div _
-        | Matmul _
-        | Transpose _
-        | Sum _
-        | Broadcast _ ->
+        | Unary ((Neg | Sin | Cos | Sqrt), _)
+        | Add _ | Sub _ | Mul _ | Div _ | Matmul _ | Transpose _ | Sum _ | Broadcast _ ->
           raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
       in
       ct_env)

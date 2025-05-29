@@ -1,10 +1,16 @@
 open! Core
 
+module Unary : sig
+  type t =
+    | Neg
+    | Sin
+    | Cos
+    | Sqrt
+  [@@deriving sexp, enumerate]
+end
+
 type 'value t =
-  | Neg of 'value
-  | Sin of 'value
-  | Cos of 'value
-  | Sqrt of 'value
+  | Unary of Unary.t * 'value
   | Add of 'value * 'value
   | Sub of 'value * 'value
   | Mul of 'value * 'value
