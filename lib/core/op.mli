@@ -25,7 +25,7 @@ type 'value t =
   | Transpose of 'value
   | Sum of
       { value : 'value
-      ; dims : [ `Just of int array | `All ]
+      ; dims : [ `Just of int Nonempty_list.t | `All ]
       ; keep_dims : bool
       }
   | Broadcast of

@@ -247,9 +247,9 @@ include Op.Make_operators (struct
         let dims_to_sum =
           (match dims_to_sum with
            | `Just dims_to_sum ->
-             Array.map dims_to_sum ~f:(fun dim ->
+             Nonempty_list.map dims_to_sum ~f:(fun dim ->
                if dim < 0 then dims_length + dim else dim)
-             |> Array.to_list
+             |> Nonempty_list.to_list
            | `All -> List.range 0 dims_length)
           |> List.sort ~compare:(Comparable.reverse Int.compare)
         in

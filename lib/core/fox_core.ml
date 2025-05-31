@@ -803,12 +803,12 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
             | _ ->
               Value.sum
                 cotangent
-                ~dims:(`Just (Array.init padding_length ~f:Fn.id))
+                ~dims:(`Just (Nonempty_list.init padding_length ~f:Fn.id))
                 ~keep_dims:false
           in
-          (match non_padded_broadcasts with
-           | [||] -> unpadded_cotangent
-           | _ ->
+          (match Array.to_list non_padded_broadcasts |> Nonempty_list.of_list with
+           | None -> unpadded_cotangent
+           | Some non_padded_broadcasts ->
              Value.sum
                unpadded_cotangent
                ~dims:(`Just non_padded_broadcasts)

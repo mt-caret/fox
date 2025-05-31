@@ -29,7 +29,7 @@ type 'value t =
   | Transpose of 'value
   | Sum of
       { value : 'value
-      ; dims : [ `Just of int array | `All ]
+      ; dims : [ `Just of int Nonempty_list.t | `All ]
       ; keep_dims : bool
       }
   | Broadcast of
@@ -86,7 +86,9 @@ let to_string t ~f =
       | `All -> "all"
       | `Just dims ->
         let dims =
-          Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+          Nonempty_list.to_list dims
+          |> List.map ~f:Int.to_string
+          |> String.concat ~sep:", "
         in
         [%string "[%{dims}]"]
     in
@@ -126,13 +128,16 @@ let infer_dims = function
      | `All -> if keep_dims then Array.map dims ~f:(fun _ -> 1) else [||]
      | `Just dims_to_sum ->
        let dims_length = Array.length dims in
-       [%test_pred: int array]
+       [%test_pred: int Nonempty_list.t]
          ~message:"infer_dims: sum: dims out of bounds"
-         (Array.for_all ~f:(fun dim -> dim < dims_length || dims_length + dim >= 0))
+         (Nonempty_list.for_all ~f:(fun dim ->
+            dim < dims_length || dims_length + dim >= 0))
          dims_to_sum;
        let dims_to_sum =
-         Array.map dims_to_sum ~f:(fun dim -> if dim < 0 then dims_length + dim else dim)
-         |> Int.Set.of_array
+         Nonempty_list.map dims_to_sum ~f:(fun dim ->
+           if dim < 0 then dims_length + dim else dim)
+         |> Nonempty_list.to_list
+         |> Int.Set.of_list
        in
        if keep_dims
        then

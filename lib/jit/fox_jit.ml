@@ -54,7 +54,7 @@ let xla_subcomp
           let dims =
             match dims with
             | `All -> Array.init (Array.length in_dims) ~f:Fn.id
-            | `Just dims -> dims
+            | `Just dims -> Nonempty_list.to_list dims |> Array.of_list
           in
           Xla.Op.reduce_sum value ~dims ~keep_dims
         | Broadcast { value = value, in_dims; dims = out_dims } ->
