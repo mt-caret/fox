@@ -130,15 +130,9 @@ let jit
 let jit' ~f ~x = jit (module Value) (module Value) ~f x
 
 let%expect_test "jit'" =
-  (* Filters out noisy XLA log message *)
-  let print output =
-    String.split_lines output
-    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
-    |> String.concat
-    |> print_endline
-  in
+  (* Suppresses noisy XLA log message *)
+  Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
   jit' ~f:foo ~x:(Value.of_float 2.) |> [%sexp_of: Value.t] |> print_s;
-  print [%expect.output];
   [%expect {| (Tensor 10) |}];
   (* Two-argument function *)
   jit
@@ -148,17 +142,10 @@ let%expect_test "jit'" =
     (Value.of_float 2., Value.of_float 3.)
   |> [%sexp_of: Value.t]
   |> print_s;
-  print [%expect.output];
   [%expect {| (Tensor -0.90019762973551742) |}]
 ;;
 
 let%expect_test "jit and matmul" =
-  let print output =
-    String.split_lines output
-    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
-    |> String.concat
-    |> print_endline
-  in
   let a = Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] |> Value.of_tensor in
   let b = Tensor.of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] |> Value.of_tensor in
   jit
@@ -168,38 +155,23 @@ let%expect_test "jit and matmul" =
     (a, b)
   |> [%sexp_of: Value.t]
   |> print_s;
-  print [%expect.output];
   [%expect {| (Tensor ((19 22) (43 50)) (dims (2 2))) |}]
 ;;
 
 let%expect_test "jit and sum" =
-  let print output =
-    String.split_lines output
-    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
-    |> String.concat
-    |> print_endline
-  in
   jit'
     ~f:(fun x -> Value.sum x)
     ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
-  print [%expect.output];
   [%expect {| (Tensor 10) |}]
 ;;
 
 let%expect_test "jit and broadcast" =
-  let print output =
-    String.split_lines output
-    |> List.filter ~f:(Fn.non (String.is_substring ~substring:"TfrtCpuClient created"))
-    |> String.concat
-    |> print_endline
-  in
   jit'
     ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |])
     ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
-  print [%expect.output];
   [%expect {| (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2))) |}]
 ;;
