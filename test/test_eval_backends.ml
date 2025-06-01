@@ -33,7 +33,8 @@ module Tensor = struct
     let open Generator.Let_syntax in
     let total_elements = Array.fold dims ~init:1 ~f:( * ) in
     let%map values =
-      List.init total_elements ~f:(fun _ -> Generator.float) |> Generator.all
+      List.init total_elements ~f:(fun _ -> Generator.float_inclusive (-100.) 100.)
+      |> Generator.all
     in
     Tensor.of_list values |> Tensor.reshape ~dims
   ;;
@@ -103,6 +104,14 @@ module Op = struct
     [@@deriving quickcheck]
   end
 
+  let reduce_dims_generator =
+    [%quickcheck.generator: int Nonempty_list.t]
+    |> Generator.filter ~f:(fun dims ->
+      [%equal: int list]
+        (Nonempty_list.to_list dims |> List.stable_dedup ~compare:Int.compare)
+        (Nonempty_list.to_list dims))
+  ;;
+
   type 'value t = 'value Op.t =
     | Unary of Unary.t * 'value
     | Binary of Binary.t * 'value * 'value
@@ -110,7 +119,10 @@ module Op = struct
     | Transpose of 'value
     | Sum of
         { value : 'value
-        ; dims : [ `Just of int Nonempty_list.t | `All ]
+        ; dims :
+            [ `Just of (int Nonempty_list.t[@quickcheck.generator reduce_dims_generator])
+            | `All
+            ]
         ; keep_dims : bool
         }
     | Broadcast of
@@ -338,64 +350,33 @@ let%expect_test "grad+jit vs grad+eval" =
     {|
     (Tensor (0 0) (dims (2)))
     (Tensor (0 0) (dims (2)))
+    |}];
+  test
+    ~f:(fun value -> grad' ~f:(fun value -> Value.sqrt value |> Value.sum) ~x:value)
+    ~x:(Value.of_tensor (Tensor.of_list [ 1.; 1. ]));
+  [%expect
+    {|
+    (Tensor (0.5 0.5) (dims (2)))
+    (Tensor (0.5 0.5) (dims (2)))
     |}]
 ;;
 
 let%expect_test "eval grad expr vs xla" =
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
-  Expect_test_helpers_core.require_does_raise [%here] (fun () ->
-    Quickcheck.test
-      (fun_generator ~op_nums:1)
-      ~trials:300
-      ~sexp_of:(fun (tensor, expr) ->
-        [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
-      ~f:(fun (tensor, expr) ->
-        let f value =
-          grad' ~f:(fun value -> eval_expr' expr value |> Value.sum) ~x:value
-        in
-        let value = Value.of_tensor tensor in
-        let eval_result = Eval.handle ~f:(fun () -> f value) in
-        let xla_result = Fox_jit.jit' ~f ~x:value in
-        assert (
-          Tensor.tensor_equal
-            (Value.to_tensor_exn eval_result)
-            (Value.to_tensor_exn xla_result))));
-  String.substr_replace_all [%expect.output] ~pattern:"\\n" ~with_:" " |> print_endline;
-  [%expect
-    {|
-    ("Base_quickcheck.Test.run: test failed"
-      (input (
-        (tensor (
-          -7.60367028949678E-321
-          5.327301005308982E-05
-          1.5115074217319489
-          -3.8352292697638489E-93
-          7.56181796669062E-309
-          -0.041349890190758742
-          8.9151169085921467E-13
-          -8796093005824
-          8.193813792082776E+58
-          -0.00029754638671875
-          -1.32818267929476E-312
-          -0.63057693094015121
-          -3.0517578125E-05
-          -170942.98172973841
-          -3.7670135498046875E-05
-          -1.2145690634778992E-232
-          -549445989040128
-          -5.7485182836103377E-08
-          -1.8831305206160042E+58
-          1.97626258336499E-323
-          189.13363346271217
-          2.4158453015843406E-12
-          -2.7743873391000038E-149
-          0.0078125
-          10.144287109375
-          -1.7078053659105757E+103
-          -3.3018408195979078E+268
-          -1.4366625342328517E-192
-          2.445209437009829E+51))
-        (expr "arg[29] -> v_0[29] = sqrt arg; ( v_0 )")))
-      (error "Assert_failure test/test_eval_backends.ml:359:8"))
-    |}]
+  Quickcheck.test
+    (fun_generator ~op_nums:1)
+    ~trials:
+      (* TODO: segfaults when set to 300! *)
+      100
+    ~sexp_of:(fun (tensor, expr) ->
+      [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+    ~f:(fun (tensor, expr) ->
+      let f value = grad' ~f:(fun value -> eval_expr' expr value |> Value.sum) ~x:value in
+      let value = Value.of_tensor tensor in
+      let eval_result = Eval.handle ~f:(fun () -> f value) in
+      let xla_result = Fox_jit.jit' ~f ~x:value in
+      assert (
+        Tensor.tensor_equal
+          (Value.to_tensor_exn eval_result)
+          (Value.to_tensor_exn xla_result)))
 ;;

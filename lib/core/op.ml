@@ -142,6 +142,14 @@ let infer_dims t =
     (match dims_to_sum with
      | `All -> Ok (if keep_dims then Array.map dims ~f:(fun _ -> 1) else [||])
      | `Just dims_to_sum ->
+       let%bind.Or_error () =
+         if Nonempty_list.to_list dims_to_sum |> List.contains_dup ~compare:Int.compare
+         then
+           Or_error.error_s
+             [%message
+               "infer_dims: Sum: duplicate reduction dimension" ~op:(t : int array t)]
+         else Ok ()
+       in
        let dims_length = Array.length dims in
        (match
           Nonempty_list.for_all dims_to_sum ~f:(fun dim ->
