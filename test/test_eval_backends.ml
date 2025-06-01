@@ -294,10 +294,8 @@ let fun_generator ~op_nums =
   let%bind expr = expr_generator ~op_nums in
   match Expr.parameters expr with
   | [ var ] ->
-    let%map value =
-      Tensor.quickcheck_generator_with_dims ~dims:var.dims >>| Value.of_tensor
-    in
-    value, expr
+    let%map tensor = Tensor.quickcheck_generator_with_dims ~dims:var.dims in
+    tensor, expr
   | _ -> failwith "fun_generator: expected 1 parameter"
 ;;
 
@@ -306,10 +304,11 @@ let%expect_test "eval expr vs xla" =
   Quickcheck.test
     (fun_generator ~op_nums:1)
     ~trials:300
-    ~sexp_of:(fun (value, expr) ->
-      [%sexp { value : Value.t; expr : string = Expr.to_string_hum expr }])
-    ~f:(fun (value, expr) ->
+    ~sexp_of:(fun (tensor, expr) ->
+      [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+    ~f:(fun (tensor, expr) ->
       let f value = eval_expr' expr value in
+      let value = Value.of_tensor tensor in
       let eval_result = Eval.handle ~f:(fun () -> f value) in
       let xla_result = Fox_jit.jit' ~f ~x:value in
       assert (
@@ -319,12 +318,27 @@ let%expect_test "eval expr vs xla" =
 ;;
 
 let%expect_test "grad+jit vs grad+eval" =
-  let f value = grad' ~f:(fun value -> Value.O.(value * value)) ~x:value in
-  Eval.handle ~f:(fun () -> f (Value.of_float 1.)) |> [%sexp_of: Value.t] |> print_s;
-  [%expect {| (Tensor 2) |}];
-  Fox_jit.jit' ~f ~x:(Value.of_float 1.) |> [%sexp_of: Value.t] |> print_s;
-  String.substr_replace_all [%expect.output] ~pattern:"\\n" ~with_:" " |> print_endline;
-  [%expect {| (Tensor 2) |}]
+  let test ~f ~x =
+    Eval.handle ~f:(fun () -> f x) |> [%sexp_of: Value.t] |> print_s;
+    Fox_jit.jit' ~f ~x |> [%sexp_of: Value.t] |> print_s
+  in
+  test
+    ~f:(fun value -> grad' ~f:(fun value -> Value.O.(value * value)) ~x:value)
+    ~x:(Value.of_float 1.);
+  [%expect
+    {|
+    (Tensor 2)
+    (Tensor 2)
+    |}];
+  test
+    ~f:(fun value ->
+      grad' ~f:(fun value -> Value.O.(value / value) |> Value.sum) ~x:value)
+    ~x:(Value.of_tensor (Tensor.of_list [ 1.; 1. ]));
+  [%expect
+    {|
+    (Tensor (0 0) (dims (2)))
+    (Tensor (0 0) (dims (2)))
+    |}]
 ;;
 
 let%expect_test "eval grad expr vs xla" =
@@ -333,12 +347,13 @@ let%expect_test "eval grad expr vs xla" =
     Quickcheck.test
       (fun_generator ~op_nums:1)
       ~trials:300
-      ~sexp_of:(fun (value, expr) ->
-        [%sexp { value : Value.t; expr : string = Expr.to_string_hum expr }])
-      ~f:(fun (value, expr) ->
+      ~sexp_of:(fun (tensor, expr) ->
+        [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+      ~f:(fun (tensor, expr) ->
         let f value =
           grad' ~f:(fun value -> eval_expr' expr value |> Value.sum) ~x:value
         in
+        let value = Value.of_tensor tensor in
         let eval_result = Eval.handle ~f:(fun () -> f value) in
         let xla_result = Fox_jit.jit' ~f ~x:value in
         assert (
@@ -350,22 +365,37 @@ let%expect_test "eval grad expr vs xla" =
     {|
     ("Base_quickcheck.Test.run: test failed"
       (input (
-        (value (
-          Tensor
-          (-2.2765450197646858E-274
-           126.14432978630066
-           2.716326520622772E+60
-           1.852679443830472E-17
-           -0.38238309169044982
-           3.7564530697704668E+60
-           -1)
-          (dims (7))))
-        (expr "arg[7] -> v_0[7] = div arg arg; ( v_0 )")))
-      (error (
-        "Invalid var/val op combination"
-        (op (
-          Binary Sub (Var ((name p_1) (dims (7)))) (Var ((name p_0) (dims (7))))))
-        (expr
-         "a_0[7] -> p_0[7] = mul (Tensor(-2.2765450197646858E-274 126.14432978630066 2.716326520622772E+60 1.852679443830472E-17 -0.38238309169044982 3.7564530697704668E+60 -1)(dims(7))) a_0; p_1[7] = mul a_0 (Tensor(-2.2765450197646858E-274 126.14432978630066 2.716326520622772E+60 1.852679443830472E-17 -0.38238309169044982 3.7564530697704668E+60 -1)(dims(7))); p_2[7] = sub p_1 p_0; p_3[7] = div p_2 (Tensor(0 15912.391937234979 7.3784297666386151E+120 3.4324211215919869E-34 0.14621682881074696 1.4110939665387963E+121 1)(dims(7))); p_4[] = sum p_3 dims=all keep_dims=false; ( p_4 )"))))
+        (tensor (
+          -7.60367028949678E-321
+          5.327301005308982E-05
+          1.5115074217319489
+          -3.8352292697638489E-93
+          7.56181796669062E-309
+          -0.041349890190758742
+          8.9151169085921467E-13
+          -8796093005824
+          8.193813792082776E+58
+          -0.00029754638671875
+          -1.32818267929476E-312
+          -0.63057693094015121
+          -3.0517578125E-05
+          -170942.98172973841
+          -3.7670135498046875E-05
+          -1.2145690634778992E-232
+          -549445989040128
+          -5.7485182836103377E-08
+          -1.8831305206160042E+58
+          1.97626258336499E-323
+          189.13363346271217
+          2.4158453015843406E-12
+          -2.7743873391000038E-149
+          0.0078125
+          10.144287109375
+          -1.7078053659105757E+103
+          -3.3018408195979078E+268
+          -1.4366625342328517E-192
+          2.445209437009829E+51))
+        (expr "arg[29] -> v_0[29] = sqrt arg; ( v_0 )")))
+      (error "Assert_failure test/test_eval_backends.ml:359:8"))
     |}]
 ;;

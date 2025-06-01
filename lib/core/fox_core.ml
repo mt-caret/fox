@@ -735,7 +735,8 @@ let%expect_test "linearize" =
     ~in_dims:[||]
   |> Expr.to_string_hum
   |> print_endline;
-  [%expect {|
+  [%expect
+    {|
     v_0[] ->
     v_1[] = cos v_0;
     v_2[] = sin v_0;
@@ -744,7 +745,8 @@ let%expect_test "linearize" =
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
-  [%expect {|
+  [%expect
+    {|
     v_0[] ->
     v_1[] = mul (Tensor 1) v_0;
     v_2[] = neg v_1;
@@ -791,6 +793,9 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Binary (Sub, Var var, Value _) -> accum_gradient ~ct_env var cotangent
         | Binary (Sub, Value _, Var var) ->
           accum_gradient ~ct_env var (Value.neg cotangent)
+        | Binary (Sub, Var v1, Var v2) ->
+          let ct_env = accum_gradient ~ct_env v1 cotangent in
+          accum_gradient ~ct_env v2 (Value.neg cotangent)
         | Binary (Mul, Var var, Value v) | Binary (Mul, Value v, Var var) ->
           accum_gradient ~ct_env var (Value.mul v cotangent)
         | Binary (Div, Var var, Value v) ->
