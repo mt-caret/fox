@@ -4,6 +4,7 @@
  (libraries
   core
   core_kernel.nonempty_list
+  core_unix
   ppx_typed_fields.typed_fields_lib
   splittable_random)
  (preprocess

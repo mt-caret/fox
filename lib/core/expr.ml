@@ -52,7 +52,7 @@ module Eq = struct
     { var : Var.t
     ; op : Atom.t Op.t
     }
-  [@@deriving sexp_of]
+  [@@deriving sexp_of, fields ~getters]
 
   let to_string { var; op } =
     let op_string = Op.to_string op ~f:Atom.to_string in
@@ -67,7 +67,7 @@ type t =
   ; return_vals : Atom.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
   }
-[@@deriving sexp_of]
+[@@deriving sexp_of, fields ~getters]
 
 let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
   let parameters = String.concat ~sep:" " (List.map parameters ~f:Var.to_string) in

@@ -27,7 +27,7 @@ module Eq : sig
     { var : Var.t
     ; op : Atom.t Op.t
     }
-  [@@deriving sexp_of]
+  [@@deriving sexp_of, fields ~getters]
 end
 
 type t =
@@ -36,6 +36,6 @@ type t =
   ; return_vals : Atom.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
   }
-[@@deriving sexp_of]
+[@@deriving sexp_of, fields ~getters]
 
 val to_string_hum : t -> string

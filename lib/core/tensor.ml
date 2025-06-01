@@ -53,7 +53,7 @@ let create_uninitialized dims =
   Bigarray.Genarray.create Bigarray.float64 Bigarray.c_layout dims
 ;;
 
-let init dims ~f = Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims f
+let init ~dims ~f = Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims f
 let reshape t ~dims = Bigarray.reshape t dims
 
 (* TODO: write a ppx that allows writing [5t] or [5.5t] which expands to
@@ -125,7 +125,8 @@ let%expect_test "arange" =
   [%expect {| ((0 1 2 3) (4 5 6 7) (8 9 10 11)) |}]
 ;;
 
-let map t ~f = init (dims t) ~f:(fun index -> f (get t index))
+let mapi t ~f = init ~dims:(dims t) ~f:(fun index -> f index (get t index))
+let map t ~f = mapi t ~f:(fun _index value -> f value)
 
 let map2 t1 t2 ~f =
   let dims1 = dims t1 in
@@ -134,8 +135,20 @@ let map2 t1 t2 ~f =
   then
     raise_s
       [%message "Tensor.map2: dims mismatch" (dims1 : int array) (dims2 : int array)];
-  init dims1 ~f:(fun index -> f (get t1 index) (get t2 index))
+  init ~dims:dims1 ~f:(fun index -> f (get t1 index) (get t2 index))
 ;;
+
+let iteri t ~f =
+  (* TODO: figure out a way to iterate over indices and get rid of this hack. *)
+  let (_ : t) =
+    mapi t ~f:(fun index value ->
+      f index value;
+      0.)
+  in
+  ()
+;;
+
+let iter t ~f = iteri t ~f:(fun _index value -> f value)
 
 let sum_single_axis t ~axis ~keep_dim =
   let dims = dims t in
@@ -147,7 +160,7 @@ let sum_single_axis t ~axis ~keep_dim =
   let result_dims =
     Array.concat [ dims_left; (if keep_dim then [| 1 |] else [||]); dims_right ]
   in
-  init result_dims ~f:(fun index ->
+  init ~dims:result_dims ~f:(fun index ->
     let index =
       if keep_dim
       then Array.copy index
@@ -238,7 +251,7 @@ include Op.Make_operators (struct
       | Transpose t ->
         (match dims t with
          | [| n; m |] ->
-           init [| m; n |] ~f:(fun index -> get t [| index.(1); index.(0) |])
+           init ~dims:[| m; n |] ~f:(fun index -> get t [| index.(1); index.(0) |])
          | dims ->
            raise_s [%message "transpose: unsupported dimensions" (dims : int array)])
       | Sum { value = t; dims = dims_to_sum; keep_dims } ->
@@ -258,11 +271,11 @@ include Op.Make_operators (struct
       | Broadcast { value = t; dims = to_dims } ->
         let from_dims = dims t in
         let dims_padding_length = Array.length to_dims - Array.length from_dims in
-        init to_dims ~f:(fun index ->
+        init ~dims:to_dims ~f:(fun index ->
           let from_index =
             Array.subo index ~pos:dims_padding_length ~len:(Array.length from_dims)
             |> Array.map2_exn from_dims ~f:(fun from_dim index_dim ->
-              index_dim % from_dim)
+              if from_dim = 1 then 0 else index_dim)
           in
           get t from_index)
     ;;
@@ -343,7 +356,7 @@ let normal ?(mean = 0.) ?(std = 1.) ~dims ~rng () =
       (f *. x1) +. mean, (f *. x2) +. mean
   in
   let next = ref None in
-  init dims ~f:(fun _index ->
+  init ~dims ~f:(fun _index ->
     match !next with
     | Some value ->
       next := None;

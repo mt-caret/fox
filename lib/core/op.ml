@@ -145,6 +145,7 @@ let infer_dims = function
            if Set.mem dims_to_sum index then 1 else dim)
        else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index)))
   | Broadcast { value = from_dims; dims = to_dims } ->
+    [%test_pred: int array] (Array.for_all ~f:Int.is_positive) to_dims;
     if Array.length to_dims < Array.length from_dims
     then
       raise_s
@@ -159,7 +160,7 @@ let infer_dims = function
     Array.zip_exn padded_from_dims to_dims
     |> [%test_pred: (int * int) array]
          ~message:"broadcast: can't broadcast"
-         (Array.for_all ~f:(fun (from, to_) -> to_ >= from && to_ % from = 0));
+         (Array.for_all ~f:(fun (from, to_) -> to_ = from || from = 1));
     to_dims
 ;;
 

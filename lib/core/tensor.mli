@@ -21,11 +21,15 @@ val of_list : float list -> t
 val of_list2_exn : float list list -> t
 
 val create : dims:int array -> float -> t
+val init : dims:int array -> f:(int array -> float) -> t
 val zeros : dims:int array -> t
 val ones : dims:int array -> t
 val arange : int -> t
 val map : t -> f:(float -> float) -> t
+val mapi : t -> f:(int array -> float -> float) -> t
 val map2 : t -> t -> f:(float -> float -> float) -> t
+val iter : t -> f:(float -> unit) -> unit
+val iteri : t -> f:(int array -> float -> unit) -> unit
 
 include Operators_intf.S with type t := t
 
