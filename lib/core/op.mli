@@ -35,6 +35,7 @@ type 'value t =
 [@@deriving sexp_of]
 
 val map : 'a t -> f:('a -> 'b) -> 'b t
+val to_list : 'a t -> 'a list
 val eval : (module Operators_intf.S with type t = 'a) -> 'a t -> 'a
 val to_string : 'a t -> f:('a -> string) -> string
 val infer_dims : int array t -> int array Or_error.t

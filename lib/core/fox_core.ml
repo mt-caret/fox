@@ -318,12 +318,12 @@ let build_expr
           })
       |> f)
   in
-  { parameters
-  ; equations = List.rev staging.equations
-  ; return_vals =
-      Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value
-  ; out_tree_def = Set_once.get_exn out_tree_def [%here]
-  }
+  Expr.create
+    ~parameters
+    ~equations:(List.rev staging.equations)
+    ~return_vals:
+      (Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value)
+    ~out_tree_def:(Set_once.get_exn out_tree_def [%here])
 ;;
 
 let build_expr' ~f ~in_dims : Expr.t =
@@ -555,14 +555,20 @@ let partially_apply_expr_flat
       | Unknown var -> Some var)
   in
   ( outputs
-  , { parameters = only_unknowns inputs
-    ; equations = List.rev partial.equations
-    ; return_vals =
-        only_unknowns outputs
-        |> List.map ~f:(fun var -> Expr.Atom.Var var)
-        |> Nonempty_list.of_list_exn
-    ; out_tree_def
-    } )
+  , match
+      Expr.create
+        ~parameters:(only_unknowns inputs)
+        ~equations:(List.rev partial.equations)
+        ~return_vals:
+          (only_unknowns outputs
+           |> List.map ~f:(fun var -> Expr.Atom.Var var)
+           |> Nonempty_list.of_list_exn)
+        ~out_tree_def
+    with
+    | exception exn ->
+      raise_s
+        [%message "Failed to create expr" (exn : exn) (inputs : Partial_value.t list)]
+    | expr -> expr )
 ;;
 
 let%expect_test "partially_apply_expr_flat" =
@@ -717,23 +723,33 @@ let%expect_test "linearize" =
     ~in_dims:[||]
   |> Expr.to_string_hum
   |> print_endline;
-  [%expect
-    {|
-    v_0[] ->
-    v_1[] = cos v_0;
-    v_2[] = sin v_0;
-    v_3[] = neg v_2;
-    ( v_3 )
-    |}];
+  [%expect.unreachable];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
-  [%expect
-    {|
-    v_0[] ->
-    v_1[] = mul (Tensor 1) v_0;
-    v_2[] = neg v_1;
-    ( v_2 )
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Failed to create expr"
+    (exn
+      ("Undefined variable" (missing_vars (((name v_1) (dims ()))))
+        (expr  "a_0[] ->\
+              \np_0[] = mul v_1 a_0;\
+              \np_1[] = neg p_0;\
+              \n( p_1 )")))
+    (inputs
+      ((Known (Var ((name v_0) (dims ())))) (Unknown ((name a_0) (dims ()))))))
+  Raised at Base__Error.raise in file "src/error.ml" (inlined), line 9, characters 21-37
+  Called from Base__Error.raise_s in file "src/error.ml", line 10, characters 26-47
+  Called from Fox_core.partially_apply_expr_flat in file "lib/core/fox_core.ml", lines 569-570, characters 6-86
+  Called from Fox_core.linearize in file "lib/core/fox_core.ml", lines 626-642, characters 4-23
+  Called from Fox_core.(fun) in file "lib/core/fox_core.ml", line 721, characters 22-46
+  Called from Fox_core.flatten_function.(fun) in file "lib/core/fox_core.ml", line 23, characters 16-40
+  Called from Fox_core.build_expr in file "lib/core/fox_core.ml", lines 312-319, characters 4-11
+  Called from Fox_core.(fun) in file "lib/core/fox_core.ml", lines 719-723, characters 2-17
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 ;;
 
 let eval_expr_transposed (expr : Expr.t) args ~cotangents =

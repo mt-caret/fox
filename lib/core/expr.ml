@@ -60,7 +60,6 @@ module Eq = struct
   ;;
 end
 
-(* TODO: add shape information to all vars and equations*)
 type t =
   { parameters : Var.t list
   ; equations : Eq.t list
@@ -78,4 +77,33 @@ let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
     |> String.concat ~sep:", "
   in
   [%string "%{parameters#String} ->\n%{equations#String}\n( %{return_vals} )"]
+;;
+
+let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
+  let env = Var.Set.of_list parameters in
+  let validate_atoms ~env (atoms : Atom.t list) =
+    match
+      List.filter_map atoms ~f:(function
+        | Var var -> Some var
+        | Value _ -> None)
+      |> List.filter ~f:(Fn.non (Set.mem env))
+    with
+    | [] -> ()
+    | missing_vars ->
+      raise_s
+        [%message
+          "Undefined variable" (missing_vars : Var.t list) ~expr:(to_string_hum t)]
+  in
+  let env =
+    List.fold equations ~init:env ~f:(fun env { var; op } ->
+      Op.to_list op |> validate_atoms ~env;
+      Set.add env var)
+  in
+  Nonempty_list.to_list return_vals |> validate_atoms ~env
+;;
+
+let create ~parameters ~equations ~return_vals ~out_tree_def =
+  let t = { parameters; equations; return_vals; out_tree_def } in
+  validate t;
+  t
 ;;

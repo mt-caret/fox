@@ -48,6 +48,15 @@ let map t ~f =
   | Broadcast { value; dims } -> Broadcast { value = f value; dims }
 ;;
 
+let to_list = function
+  | Unary (_, a) -> [ a ]
+  | Binary (_, a, b) -> [ a; b ]
+  | Matmul (a, b) -> [ a; b ]
+  | Transpose a -> [ a ]
+  | Sum { value; dims = _; keep_dims = _ } -> [ value ]
+  | Broadcast { value; dims = _ } -> [ value ]
+;;
+
 let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   match t with
   | Unary (kind, a) ->
