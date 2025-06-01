@@ -33,11 +33,14 @@ module Atom = struct
     | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
   ;;
 
-  let of_value (T { value = x; type_id; dims } as value : Value.t) : t =
+  let of_value (T { value = x; type_id; dims } as value : Value.t) ~(vars : Var.Set.t) : t
+    =
     match Type_equal.Id.same_witness type_id Var.type_id with
     | Some T ->
       [%test_eq: int array] dims (Var.dims x);
-      Var x
+      (match Set.mem vars x with
+       | true -> Var x
+       | false -> Value value)
     | None -> Value value
   ;;
 

@@ -18,7 +18,7 @@ module Atom : sig
     | Value of Value.t
   [@@deriving sexp_of]
 
-  val of_value : Value.t -> t
+  val of_value : Value.t -> vars:Var.Set.t -> t
   val dims : t -> int array
 end
 

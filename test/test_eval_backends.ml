@@ -240,11 +240,11 @@ let expr_generator ~op_nums =
            , { Expr.Eq.var; op } :: equations ))
   in
   let out = List.hd_exn equations |> Expr.Eq.var in
-  { Expr.parameters = [ arg ]
-  ; equations = List.rev equations
-  ; return_vals = [ Expr.Atom.Var out ]
-  ; out_tree_def = Value_tree.Def.leaf ~dims:out.dims
-  }
+  Expr.create
+    ~parameters:[ arg ]
+    ~equations:(List.rev equations)
+    ~return_vals:[ Expr.Atom.Var out ]
+    ~out_tree_def:(Value_tree.Def.leaf ~dims:out.dims)
 ;;
 
 let%expect_test "expr_generator" =
@@ -318,24 +318,13 @@ let%expect_test "eval expr vs xla" =
           (Value.to_tensor_exn xla_result)))
 ;;
 
-(* TODO: fix combination of jit and grad *)
-let%expect_test "reproduction" =
+let%expect_test "grad+jit vs grad+eval" =
   let f value = grad' ~f:(fun value -> Value.O.(value * value)) ~x:value in
   Eval.handle ~f:(fun () -> f (Value.of_float 1.)) |> [%sexp_of: Value.t] |> print_s;
   [%expect {| (Tensor 2) |}];
-  Expect_test_helpers_core.require_does_raise [%here] (fun () ->
-    Fox_jit.jit' ~f ~x:(Value.of_float 1.) |> [%sexp_of: Value.t] |> print_s);
+  Fox_jit.jit' ~f ~x:(Value.of_float 1.) |> [%sexp_of: Value.t] |> print_s;
   String.substr_replace_all [%expect.output] ~pattern:"\\n" ~with_:" " |> print_endline;
-  [%expect
-    {|
-    ("Invalid var/val op combination"
-      (op (
-        Binary Mul
-        (Var ((name a_0) (dims ())))
-        (Var ((name v_0) (dims ())))))
-      (expr
-       "a_0[] -> p_0[] = mul v_0 a_0; p_1[] = mul a_0 v_0; p_2[] = add p_1 p_0; ( p_2 )"))
-    |}]
+  [%expect {| (Tensor 2) |}]
 ;;
 
 let%expect_test "eval grad expr vs xla" =
@@ -361,15 +350,22 @@ let%expect_test "eval grad expr vs xla" =
     {|
     ("Base_quickcheck.Test.run: test failed"
       (input (
-        (value (Tensor -1.6846339859241422E+60))
-        (expr "arg[] -> v_0[] = mul arg arg; ( v_0 )")))
+        (value (
+          Tensor
+          (-2.2765450197646858E-274
+           126.14432978630066
+           2.716326520622772E+60
+           1.852679443830472E-17
+           -0.38238309169044982
+           3.7564530697704668E+60
+           -1)
+          (dims (7))))
+        (expr "arg[7] -> v_0[7] = div arg arg; ( v_0 )")))
       (error (
         "Invalid var/val op combination"
         (op (
-          Binary Mul
-          (Var ((name a_0) (dims ())))
-          (Var ((name v_0) (dims ())))))
+          Binary Sub (Var ((name p_1) (dims (7)))) (Var ((name p_0) (dims (7))))))
         (expr
-         "a_0[] -> p_0[] = mul v_0 a_0; p_1[] = mul a_0 v_0; p_2[] = add p_1 p_0; p_3[] = sum p_2 dims=all keep_dims=false; ( p_3 )"))))
+         "a_0[7] -> p_0[7] = mul (Tensor(-2.2765450197646858E-274 126.14432978630066 2.716326520622772E+60 1.852679443830472E-17 -0.38238309169044982 3.7564530697704668E+60 -1)(dims(7))) a_0; p_1[7] = mul a_0 (Tensor(-2.2765450197646858E-274 126.14432978630066 2.716326520622772E+60 1.852679443830472E-17 -0.38238309169044982 3.7564530697704668E+60 -1)(dims(7))); p_2[7] = sub p_1 p_0; p_3[7] = div p_2 (Tensor(0 15912.391937234979 7.3784297666386151E+120 3.4324211215919869E-34 0.14621682881074696 1.4110939665387963E+121 1)(dims(7))); p_4[] = sum p_3 dims=all keep_dims=false; ( p_4 )"))))
     |}]
 ;;

@@ -269,22 +269,27 @@ module Staging = struct
   type t =
     { mutable equations : Expr.Eq.t list
     ; mutable name_counter : int
+    ; mutable vars : Expr.Var.Set.t
     }
 
-  let create () = { equations = []; name_counter = 0 }
+  let create () = { equations = []; name_counter = 0; vars = Expr.Var.Set.empty }
 
-  let fresh_var t ~dims : Expr.Var.t =
+  let fresh_var t ~dims =
     let name = [%string "v_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
-    { name; dims }
+    let var : Expr.Var.t = { name; dims } in
+    t.vars <- Set.add t.vars var;
+    var
   ;;
+
+  let value_to_atom t value = Expr.Atom.of_value ~vars:t.vars value
 
   let handle t ~f =
     try f () with
     | effect Fox_effect.Op op, k ->
       let dims = Op.map op ~f:Value.dims |> Op.infer_dims_exn in
       let binder = fresh_var t ~dims in
-      t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
+      t.equations <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
       continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
   ;;
 end
@@ -322,7 +327,8 @@ let build_expr
     ~parameters
     ~equations:(List.rev staging.equations)
     ~return_vals:
-      (Nonempty_list.of_list_exn result |> Nonempty_list.map ~f:Expr.Atom.of_value)
+      (Nonempty_list.of_list_exn result
+       |> Nonempty_list.map ~f:(Staging.value_to_atom staging))
     ~out_tree_def:(Set_once.get_exn out_tree_def [%here])
 ;;
 
@@ -469,8 +475,9 @@ module Partial_value = struct
     | Unknown var -> Expr.Var.dims var
   ;;
 
-  let to_atom : t -> Expr.Atom.t = function
-    | Known value -> Expr.Atom.of_value value
+  let to_atom t ~vars =
+    match t with
+    | Known value -> Expr.Atom.of_value value ~vars
     | Unknown var -> Expr.Atom.Var var
   ;;
 
@@ -481,14 +488,17 @@ module Partial = struct
   type t =
     { mutable equations : Expr.Eq.t list
     ; mutable name_counter : int
+    ; mutable vars : Expr.Var.Set.t
     }
 
-  let create () = { equations = []; name_counter = 0 }
+  let create () = { equations = []; name_counter = 0; vars = Expr.Var.Set.empty }
 
-  let fresh_var t ~dims : Expr.Var.t =
+  let fresh_var t ~dims =
     let name = [%string "p_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
-    { name; dims }
+    let var : Expr.Var.t = { name; dims } in
+    t.vars <- Set.add t.vars var;
+    var
   ;;
 
   let lift (T { value = x; type_id; dims = _ } as value : Value.t) : Partial_value.t =
@@ -496,6 +506,8 @@ module Partial = struct
     | Some T -> x
     | None -> Known value
   ;;
+
+  let value_to_atom t value = Partial_value.to_atom value ~vars:t.vars
 
   let handle t ~f =
     try f () with
@@ -515,7 +527,7 @@ module Partial = struct
           let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims_exn in
           let binder = fresh_var t ~dims in
           t.equations
-          <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;
+          <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
           Unknown binder
       in
       continue
@@ -723,33 +735,21 @@ let%expect_test "linearize" =
     ~in_dims:[||]
   |> Expr.to_string_hum
   |> print_endline;
-  [%expect.unreachable];
+  [%expect {|
+    v_0[] ->
+    v_1[] = cos v_0;
+    v_2[] = sin v_0;
+    v_3[] = neg v_2;
+    ( v_3 )
+    |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
-  [%expect.unreachable]
-[@@expect.uncaught_exn {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Failed to create expr"
-    (exn
-      ("Undefined variable" (missing_vars (((name v_1) (dims ()))))
-        (expr  "a_0[] ->\
-              \np_0[] = mul v_1 a_0;\
-              \np_1[] = neg p_0;\
-              \n( p_1 )")))
-    (inputs
-      ((Known (Var ((name v_0) (dims ())))) (Unknown ((name a_0) (dims ()))))))
-  Raised at Base__Error.raise in file "src/error.ml" (inlined), line 9, characters 21-37
-  Called from Base__Error.raise_s in file "src/error.ml", line 10, characters 26-47
-  Called from Fox_core.partially_apply_expr_flat in file "lib/core/fox_core.ml", lines 569-570, characters 6-86
-  Called from Fox_core.linearize in file "lib/core/fox_core.ml", lines 626-642, characters 4-23
-  Called from Fox_core.(fun) in file "lib/core/fox_core.ml", line 721, characters 22-46
-  Called from Fox_core.flatten_function.(fun) in file "lib/core/fox_core.ml", line 23, characters 16-40
-  Called from Fox_core.build_expr in file "lib/core/fox_core.ml", lines 312-319, characters 4-11
-  Called from Fox_core.(fun) in file "lib/core/fox_core.ml", lines 719-723, characters 2-17
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    v_0[] ->
+    v_1[] = mul (Tensor 1) v_0;
+    v_2[] = neg v_1;
+    ( v_2 )
+    |}]
 ;;
 
 let eval_expr_transposed (expr : Expr.t) args ~cotangents =
