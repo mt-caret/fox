@@ -335,9 +335,9 @@ let%expect_test "build_expr" =
   [%expect
     {|
     v_0[] ->
-    v_1[] = add v_0 (Tensor 3)
-    v_2[] = mul v_0 v_1
-    in ( v_2 )
+    v_1[] = add v_0 (Tensor 3);
+    v_2[] = mul v_0 v_1;
+    ( v_2 )
     |}]
 ;;
 
@@ -348,8 +348,8 @@ let%expect_test "build_expr2" =
   [%expect
     {|
     v_0[] ->
-    v_1[] = mul (Tensor 2) (Tensor 2)
-    in ( v_1 )
+    v_1[] = mul (Tensor 2) (Tensor 2);
+    ( v_1 )
     |}]
 ;;
 
@@ -416,45 +416,45 @@ let%expect_test "nth_order_derivative build_expr" =
   [%expect
     {|
     v_0[] ->
-    v_1[] = add v_0 (Tensor 3)
-    v_2[] = mul v_0 v_1
-    in ( v_2 )
+    v_1[] = add v_0 (Tensor 3);
+    v_2[] = mul v_0 v_1;
+    ( v_2 )
     |}];
   print ~n:1;
   [%expect
     {|
     v_0[] ->
-    v_1[] = add (Tensor 1) (Tensor 0)
-    v_2[] = add v_0 (Tensor 3)
-    v_3[] = mul v_0 v_1
-    v_4[] = mul (Tensor 1) v_2
-    v_5[] = add v_4 v_3
-    v_6[] = mul v_0 v_2
-    in ( v_5 )
+    v_1[] = add (Tensor 1) (Tensor 0);
+    v_2[] = add v_0 (Tensor 3);
+    v_3[] = mul v_0 v_1;
+    v_4[] = mul (Tensor 1) v_2;
+    v_5[] = add v_4 v_3;
+    v_6[] = mul v_0 v_2;
+    ( v_5 )
     |}];
   print ~n:2;
   [%expect
     {|
     v_0[] ->
-    v_1[] = add (Tensor 0) (Tensor 0)
-    v_2[] = add (Tensor 1) (Tensor 0)
-    v_3[] = add (Tensor 1) (Tensor 0)
-    v_4[] = add v_0 (Tensor 3)
-    v_5[] = mul v_0 v_1
-    v_6[] = mul (Tensor 1) v_2
-    v_7[] = add v_6 v_5
-    v_8[] = mul v_0 v_2
-    v_9[] = mul (Tensor 1) v_3
-    v_10[] = mul (Tensor 0) v_4
-    v_11[] = add v_10 v_9
-    v_12[] = mul (Tensor 1) v_4
-    v_13[] = add v_11 v_7
-    v_14[] = add v_12 v_8
-    v_15[] = mul v_0 v_3
-    v_16[] = mul (Tensor 1) v_4
-    v_17[] = add v_16 v_15
-    v_18[] = mul v_0 v_4
-    in ( v_13 )
+    v_1[] = add (Tensor 0) (Tensor 0);
+    v_2[] = add (Tensor 1) (Tensor 0);
+    v_3[] = add (Tensor 1) (Tensor 0);
+    v_4[] = add v_0 (Tensor 3);
+    v_5[] = mul v_0 v_1;
+    v_6[] = mul (Tensor 1) v_2;
+    v_7[] = add v_6 v_5;
+    v_8[] = mul v_0 v_2;
+    v_9[] = mul (Tensor 1) v_3;
+    v_10[] = mul (Tensor 0) v_4;
+    v_11[] = add v_10 v_9;
+    v_12[] = mul (Tensor 1) v_4;
+    v_13[] = add v_11 v_7;
+    v_14[] = add v_12 v_8;
+    v_15[] = mul v_0 v_3;
+    v_16[] = mul (Tensor 1) v_4;
+    v_17[] = add v_16 v_15;
+    v_18[] = mul v_0 v_4;
+    ( v_13 )
     |}]
 ;;
 
@@ -587,11 +587,11 @@ let%expect_test "partially_apply_expr_flat" =
   [%expect
     {|
     x[] ->
-    p_0[] = mul x x
-    p_1[] = add p_0 (Tensor 4)
-    p_2[] = mul (Tensor 4) x
-    p_3[] = add p_2 (Tensor 3)
-    in ( p_3, p_1 )
+    p_0[] = mul x x;
+    p_1[] = add p_0 (Tensor 4);
+    p_2[] = mul (Tensor 4) x;
+    p_3[] = add p_2 (Tensor 3);
+    ( p_3, p_1 )
     |}]
 ;;
 
@@ -688,9 +688,9 @@ let%expect_test "linearize" =
   [%expect
     {|
     v_0[] ->
-    v_1[] = sin v_0
-    v_2[] = neg v_1
-    in ( v_2 )
+    v_1[] = sin v_0;
+    v_2[] = neg v_1;
+    ( v_2 )
     |}];
   build_expr
     (module Value.Tuple2)
@@ -702,12 +702,12 @@ let%expect_test "linearize" =
   [%expect
     {|
     v_0[] v_1[] ->
-    v_2[] = cos v_0
-    v_3[] = mul v_2 v_1
-    v_4[] = sin v_0
-    v_5[] = neg v_3
-    v_6[] = neg v_4
-    in ( v_6, v_5 )
+    v_2[] = cos v_0;
+    v_3[] = mul v_2 v_1;
+    v_4[] = sin v_0;
+    v_5[] = neg v_3;
+    v_6[] = neg v_4;
+    ( v_6, v_5 )
     |}];
   (* TODO: fix consts? *)
   build_expr'
@@ -720,19 +720,19 @@ let%expect_test "linearize" =
   [%expect
     {|
     v_0[] ->
-    v_1[] = cos v_0
-    v_2[] = sin v_0
-    v_3[] = neg v_2
-    in ( v_3 )
+    v_1[] = cos v_0;
+    v_2[] = sin v_0;
+    v_3[] = neg v_2;
+    ( v_3 )
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
     v_0[] ->
-    v_1[] = mul (Tensor 1) v_0
-    v_2[] = neg v_1
-    in ( v_2 )
+    v_1[] = mul (Tensor 1) v_0;
+    v_2[] = neg v_1;
+    ( v_2 )
     |}]
 ;;
 

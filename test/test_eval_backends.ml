@@ -257,34 +257,34 @@ let%expect_test "expr_generator" =
   [%expect
     {|
     arg[4] ->
-    v_0[4] = broadcast arg dims=[4]
-    in ( v_0 )
+    v_0[4] = broadcast arg dims=[4];
+    ( v_0 )
     --------------------------------
     arg[2,2] ->
-    v_0[2,2] = add arg arg
-    v_1[2,2] = sin v_0
-    in ( v_1 )
+    v_0[2,2] = add arg arg;
+    v_1[2,2] = sin v_0;
+    ( v_1 )
     --------------------------------
     arg[5] ->
-    v_0[5] = sin arg
-    v_1[5] = sub v_0 v_0
-    v_2[5] = div arg arg
-    in ( v_2 )
+    v_0[5] = sin arg;
+    v_1[5] = sub v_0 v_0;
+    v_2[5] = div arg arg;
+    ( v_2 )
     --------------------------------
     arg[5] ->
-    v_0[5] = mul arg arg
-    v_1[5] = div v_0 arg
-    v_2[1] = sum v_1 dims=all keep_dims=true
-    v_3[2,1,1,3,1] = broadcast v_2 dims=[2, 1, 1, 3, 1]
-    in ( v_3 )
+    v_0[5] = mul arg arg;
+    v_1[5] = div v_0 arg;
+    v_2[1] = sum v_1 dims=all keep_dims=true;
+    v_3[2,1,1,3,1] = broadcast v_2 dims=[2, 1, 1, 3, 1];
+    ( v_3 )
     --------------------------------
     arg[4] ->
-    v_0[4] = div arg arg
-    v_1[4] = cos arg
-    v_2[4] = neg v_0
-    v_3[1] = sum arg dims=all keep_dims=true
-    v_4[4] = sqrt v_0
-    in ( v_4 )
+    v_0[4] = div arg arg;
+    v_1[4] = cos arg;
+    v_2[4] = neg v_0;
+    v_3[1] = sum arg dims=all keep_dims=true;
+    v_4[4] = sqrt v_0;
+    ( v_4 )
     --------------------------------
     |}]
 ;;
@@ -325,6 +325,7 @@ let%expect_test "reproduction" =
   [%expect {| (Tensor 2) |}];
   Expect_test_helpers_core.require_does_raise [%here] (fun () ->
     Fox_jit.jit' ~f ~x:(Value.of_float 1.) |> [%sexp_of: Value.t] |> print_s);
+  String.substr_replace_all [%expect.output] ~pattern:"\\n" ~with_:" " |> print_endline;
   [%expect
     {|
     ("Invalid var/val op combination"
@@ -333,7 +334,7 @@ let%expect_test "reproduction" =
         (Var ((name a_0) (dims ())))
         (Var ((name v_0) (dims ())))))
       (expr
-       "a_0[] ->\np_0[] = mul v_0 a_0\np_1[] = mul a_0 v_0\np_2[] = add p_1 p_0\nin ( p_2 )"))
+       "a_0[] -> p_0[] = mul v_0 a_0; p_1[] = mul a_0 v_0; p_2[] = add p_1 p_0; ( p_2 )"))
     |}]
 ;;
 
@@ -355,12 +356,13 @@ let%expect_test "eval grad expr vs xla" =
           Tensor.tensor_equal
             (Value.to_tensor_exn eval_result)
             (Value.to_tensor_exn xla_result))));
+  String.substr_replace_all [%expect.output] ~pattern:"\\n" ~with_:" " |> print_endline;
   [%expect
     {|
     ("Base_quickcheck.Test.run: test failed"
       (input (
         (value (Tensor -1.6846339859241422E+60))
-        (expr "arg[] ->\nv_0[] = mul arg arg\nin ( v_0 )")))
+        (expr "arg[] -> v_0[] = mul arg arg; ( v_0 )")))
       (error (
         "Invalid var/val op combination"
         (op (
@@ -368,6 +370,6 @@ let%expect_test "eval grad expr vs xla" =
           (Var ((name a_0) (dims ())))
           (Var ((name v_0) (dims ())))))
         (expr
-         "a_0[] ->\np_0[] = mul v_0 a_0\np_1[] = mul a_0 v_0\np_2[] = add p_1 p_0\np_3[] = sum p_2 dims=all keep_dims=false\nin ( p_3 )"))))
+         "a_0[] -> p_0[] = mul v_0 a_0; p_1[] = mul a_0 v_0; p_2[] = add p_1 p_0; p_3[] = sum p_2 dims=all keep_dims=false; ( p_3 )"))))
     |}]
 ;;

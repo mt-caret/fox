@@ -56,7 +56,7 @@ module Eq = struct
 
   let to_string { var; op } =
     let op_string = Op.to_string op ~f:Atom.to_string in
-    [%string "%{var#Var} = %{op_string}"]
+    [%string "%{var#Var} = %{op_string};"]
   ;;
 end
 
@@ -77,5 +77,5 @@ let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
     |> List.map ~f:Atom.to_string
     |> String.concat ~sep:", "
   in
-  [%string "%{parameters#String} ->\n%{equations#String}\nin ( %{return_vals} )"]
+  [%string "%{parameters#String} ->\n%{equations#String}\n( %{return_vals} )"]
 ;;
