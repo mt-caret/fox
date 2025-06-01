@@ -212,15 +212,8 @@ let op_generator ~values_by_dims =
       (match
          Map.keys values_by_dims
          |> List.filter ~f:(fun input_dims ->
-           (* TODO: this is pretty messy, but works. There probably should be two variants in op.mli:
-
-           {[
-             val infer_dims : int array Op.t -> int array Or_error.t
-             val infer_dims_exn : int array Op.t -> int array
-           ]} *)
-           match Fox_core.Op.infer_dims (Broadcast { value = input_dims; dims }) with
-           | exception _ -> false
-           | _ -> true)
+           Fox_core.Op.infer_dims (Broadcast { value = input_dims; dims })
+           |> Or_error.is_ok)
        with
        | [] -> return None
        | all_dims ->
@@ -239,7 +232,9 @@ let expr_generator ~op_nums =
          ~f:(fun accum i ->
            let%bind values_by_dims, equations = accum in
            let%map op = op_generator ~values_by_dims in
-           let dims = Fox_core.Op.map op ~f:Expr.Atom.dims |> Fox_core.Op.infer_dims in
+           let dims =
+             Fox_core.Op.map op ~f:Expr.Atom.dims |> Fox_core.Op.infer_dims_exn
+           in
            let var : Expr.Var.t = { name = [%string "v_%{i#Int}"]; dims } in
            ( Map.add_multi values_by_dims ~key:dims ~data:(Expr.Atom.Var var)
            , { Expr.Eq.var; op } :: equations ))

@@ -37,7 +37,8 @@ type 'value t =
 val map : 'a t -> f:('a -> 'b) -> 'b t
 val eval : (module Operators_intf.S with type t = 'a) -> 'a t -> 'a
 val to_string : 'a t -> f:('a -> string) -> string
-val infer_dims : int array t -> int array
+val infer_dims : int array t -> int array Or_error.t
+val infer_dims_exn : int array t -> int array
 
 module Make_operators (M : sig
     type value [@@deriving sexp_of]

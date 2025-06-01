@@ -282,10 +282,9 @@ module Staging = struct
   let handle t ~f =
     try f () with
     | effect Fox_effect.Op op, k ->
-      let dims = Op.map op ~f:Value.dims |> Op.infer_dims in
+      let dims = Op.map op ~f:Value.dims |> Op.infer_dims_exn in
       let binder = fresh_var t ~dims in
       t.equations <- { var = binder; op = Op.map op ~f:Expr.Atom.of_value } :: t.equations;
-      let dims = Op.map op ~f:Value.dims |> Op.infer_dims in
       continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
   ;;
 end
@@ -513,7 +512,7 @@ module Partial = struct
         | ( Unary ((Neg | Sin | Cos | Sqrt), _)
           | Binary ((Add | Sub | Mul | Div), _, _)
           | Matmul _ | Transpose _ | Sum _ | Broadcast _ ) as op ->
-          let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims in
+          let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims_exn in
           let binder = fresh_var t ~dims in
           t.equations
           <- { var = binder; op = Op.map op ~f:Partial_value.to_atom } :: t.equations;

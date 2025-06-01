@@ -64,7 +64,7 @@ let xla_subcomp
             ~out_dims
             ~broadcast_dims:(Array.mapi in_dims ~f:(fun i _ -> padding_length + i))
       in
-      let dims = Op.map op ~f:snd |> Op.infer_dims in
+      let dims = Op.map op ~f:snd |> Op.infer_dims_exn in
       Map.add_exn env ~key:var ~data:(xla_op, dims))
   in
   Nonempty_list.map return_vals ~f:(fun atom -> read_atom atom ~env |> fst)

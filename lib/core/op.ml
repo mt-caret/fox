@@ -100,69 +100,92 @@ let to_string t ~f =
     [%string "broadcast %{f value} dims=[%{dims}]"]
 ;;
 
-(* TODO: test against operations in tensor.ml *)
-let infer_dims = function
-  | Unary ((Neg | Sin | Cos | Sqrt), dims) -> dims
+let infer_dims t =
+  match t with
+  | Unary ((Neg | Sin | Cos | Sqrt), dims) -> Ok dims
   | Binary ((Add | Sub | Mul | Div), dims1, dims2) ->
-    [%test_eq: int array] dims1 dims2;
+    let%map.Or_error () =
+      if [%equal: int array] dims1 dims2
+      then Ok ()
+      else Or_error.error_s [%message "infer_dims: dims mismatch" ~op:(t : int array t)]
+    in
     dims1
   | Matmul (dims1, dims2) ->
+    let dim_mismatch () =
+      Or_error.error_s
+        [%message "infer_dims: Matmul: dims mismatch" ~op:(t : int array t)]
+    in
     (match dims1, dims2 with
-     | [| n; m |], [| m' |] ->
-       [%test_eq: int] m m';
-       [| n |]
-     | [| n; m |], [| m'; k |] ->
-       [%test_eq: int] m m';
-       [| n; k |]
+     | [| n; m |], [| m' |] -> if m <> m' then dim_mismatch () else Ok [| n |]
+     | [| n; m |], [| m'; k |] -> if m <> m' then dim_mismatch () else Ok [| n; k |]
      | _ ->
-       raise_s
+       Or_error.error_s
          [%message
-           "infer_dims: Invalid matmul dimensions" (dims1 : int array) (dims2 : int array)])
+           "infer_dims: Matmul: unsupported matmul dimensions" ~op:(t : int array t)])
   | Transpose dims ->
     (match dims with
-     | [| n; k |] -> [| k; n |]
-     | dims ->
-       raise_s [%message "infer_dims: Invalid transpose dimensions" (dims : int array)])
+     | [| n; k |] -> Ok [| k; n |]
+     | _ ->
+       Or_error.error_s
+         [%message
+           "infer_dims: Transpose: unsupported transpose dimensions" ~op:(t : int array t)])
   | Sum { value = dims; dims = dims_to_sum; keep_dims } ->
     (match dims_to_sum with
-     | `All -> if keep_dims then Array.map dims ~f:(fun _ -> 1) else [||]
+     | `All -> Ok (if keep_dims then Array.map dims ~f:(fun _ -> 1) else [||])
      | `Just dims_to_sum ->
        let dims_length = Array.length dims in
-       [%test_pred: int Nonempty_list.t]
-         ~message:"infer_dims: sum: dims out of bounds"
-         (Nonempty_list.for_all ~f:(fun dim ->
-            dim < dims_length || dims_length + dim >= 0))
-         dims_to_sum;
-       let dims_to_sum =
-         Nonempty_list.map dims_to_sum ~f:(fun dim ->
-           if dim < 0 then dims_length + dim else dim)
-         |> Nonempty_list.to_list
-         |> Int.Set.of_list
-       in
-       if keep_dims
-       then
-         Array.mapi dims ~f:(fun index dim ->
-           if Set.mem dims_to_sum index then 1 else dim)
-       else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index)))
+       (match
+          Nonempty_list.for_all dims_to_sum ~f:(fun dim ->
+            dim < dims_length || dims_length + dim >= 0)
+        with
+        | false ->
+          Or_error.error_s
+            [%message "infer_dims: dims out of bounds" ~op:(t : int array t)]
+        | true ->
+          let dims =
+            let dims_to_sum =
+              Nonempty_list.map dims_to_sum ~f:(fun dim ->
+                if dim < 0 then dims_length + dim else dim)
+              |> Nonempty_list.to_list
+              |> Int.Set.of_list
+            in
+            if keep_dims
+            then
+              Array.mapi dims ~f:(fun index dim ->
+                if Set.mem dims_to_sum index then 1 else dim)
+            else Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
+          in
+          Ok dims))
   | Broadcast { value = from_dims; dims = to_dims } ->
-    [%test_pred: int array] (Array.for_all ~f:Int.is_positive) to_dims;
-    if Array.length to_dims < Array.length from_dims
-    then
-      raise_s
-        [%message
-          "broadcast: can't broadcast to a larger rank"
-            (from_dims : int array)
-            (to_dims : int array)];
-    let dims_padding_length = Array.length to_dims - Array.length from_dims in
-    let padded_from_dims =
-      Array.append (Array.create ~len:dims_padding_length 1) from_dims
+    let%bind.Or_error () =
+      if Array.for_all to_dims ~f:Int.is_positive
+      then Ok ()
+      else
+        Or_error.error_s
+          [%message "infer_dims: dims must be positive" ~op:(t : int array t)]
     in
-    Array.zip_exn padded_from_dims to_dims
-    |> [%test_pred: (int * int) array]
-         ~message:"broadcast: can't broadcast"
-         (Array.for_all ~f:(fun (from, to_) -> to_ = from || from = 1));
-    to_dims
+    let%bind.Or_error () =
+      if Array.length to_dims >= Array.length from_dims
+      then Ok ()
+      else
+        Or_error.error_s
+          [%message "infer_dims: can't broadcast to a larger rank" ~op:(t : int array t)]
+    in
+    let%bind.Or_error () =
+      let dims_padding_length = Array.length to_dims - Array.length from_dims in
+      let padded_from_dims =
+        Array.append (Array.create ~len:dims_padding_length 1) from_dims
+      in
+      if
+        Array.zip_exn padded_from_dims to_dims
+        |> Array.for_all ~f:(fun (from, to_) -> to_ = from || from = 1)
+      then Ok ()
+      else Or_error.error_s [%message "infer_dims: can't broadcast" ~op:(t : int array t)]
+    in
+    Ok to_dims
 ;;
+
+let infer_dims_exn t = infer_dims t |> ok_exn
 
 module Make_operators (M : sig
     type value [@@deriving sexp_of]
@@ -173,7 +196,7 @@ module Make_operators (M : sig
   end) : Operators_intf.S with type t := M.value = struct
   let eval =
     fun t ->
-    let inferred_out_dims = map t ~f:M.dims |> infer_dims in
+    let inferred_out_dims = map t ~f:M.dims |> infer_dims_exn in
     let out = M.eval t in
     [%test_result: int array]
       (M.dims out)
