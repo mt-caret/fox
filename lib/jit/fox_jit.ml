@@ -72,8 +72,10 @@ let xla_subcomp
   |> Xla.Op.tuple ~builder
 ;;
 
+let xla_builder = lazy (Xla.Builder.create ~name:"xla_call")
+
 let xla_callable (expr : Expr.t) =
-  let xla_builder = Xla.Builder.create ~name:"xla_call" in
+  let xla_builder = Lazy.force xla_builder in
   let xla_params =
     List.mapi expr.parameters ~f:(fun i { name; dims } ->
       (* TODO: right now we assume all parameters are single-element tensors. *)

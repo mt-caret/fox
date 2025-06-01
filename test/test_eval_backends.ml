@@ -365,9 +365,10 @@ let%expect_test "eval grad expr vs xla" =
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
   Quickcheck.test
     (fun_generator ~op_nums:1)
-    ~trials:
-      (* TODO: segfaults when set to 300! *)
-      100
+    (* TODO: without a periodic [Gc.full_major ()], pthread_create fails with EAGAIN
+       and causes a SIGABRT (at least on macos) when ~trials is set to more than 300.
+       This is likely a result of not properly releasing resources somewhere. *)
+    ~trials:200
     ~sexp_of:(fun (tensor, expr) ->
       [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
     ~f:(fun (tensor, expr) ->
