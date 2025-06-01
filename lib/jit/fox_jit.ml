@@ -74,7 +74,7 @@ let xla_subcomp
 
 let xla_builder = lazy (Xla.Builder.create ~name:"xla_call")
 
-let xla_callable (expr : Expr.t) =
+let xla_callable ?(print_hlo = false) (expr : Expr.t) =
   let xla_builder = Lazy.force xla_builder in
   let xla_params =
     List.mapi expr.parameters ~f:(fun i { name; dims } ->
@@ -84,7 +84,14 @@ let xla_callable (expr : Expr.t) =
   let out = xla_subcomp expr xla_params ~builder:xla_builder in
   let xla_client = Xla.Client.cpu () in
   let xla_device = Xla.Client.addressable_devices xla_client |> List.hd_exn in
-  let xla_exe = Xla.Computation.build ~root:out |> Xla.Executable.compile xla_client in
+  let computation = Xla.Computation.build ~root:out in
+  if print_hlo
+  then
+    Xla.Computation.proto computation
+    |> Xla.Hlo_module_proto.to_string
+    |> String.strip
+    |> print_endline;
+  let xla_exe = Xla.Executable.compile xla_client computation in
   Staged.stage (fun inputs ->
     let inputs =
       List.map inputs ~f:(fun tensor ->
@@ -110,6 +117,7 @@ let jit
       (type in_ out)
       (module In : Treeable_intf.S with type t = in_)
       (module Out : Treeable_intf.S with type t = out)
+      ?print_hlo
       ~f
       (input : in_)
   : out
@@ -120,7 +128,7 @@ let jit
     Value_tree.flatten input_tree |> List.map ~f:Value.to_tensor_exn
   in
   let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
-  let xla_callable = xla_callable expr |> Staged.unstage in
+  let xla_callable = xla_callable ?print_hlo expr |> Staged.unstage in
   let output =
     xla_callable flattened_input_tensors
     |> Nonempty_list.to_list
@@ -129,51 +137,118 @@ let jit
   Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree
 ;;
 
-let jit' ~f ~x = jit (module Value) (module Value) ~f x
+let jit' ?print_hlo ~f x = jit (module Value) (module Value) ?print_hlo ~f x
 
 let%expect_test "jit'" =
   (* Suppresses noisy XLA log message *)
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
-  jit' ~f:foo ~x:(Value.of_float 2.) |> [%sexp_of: Value.t] |> print_s;
-  [%expect {| (Tensor 10) |}];
+  jit' ~print_hlo:true ~f:foo (Value.of_float 2.) |> [%sexp_of: Value.t] |> print_s;
+  [%expect
+    {|
+    HloModule xla_call.6, entry_computation_layout={(f64[])->(f64[])}
+
+    ENTRY %xla_call.6 (v_0.1: f64[]) -> (f64[]) {
+      %v_0.1 = f64[] parameter(0)
+      %constant.2 = f64[] constant(3)
+      %add.3 = f64[] add(f64[] %v_0.1, f64[] %constant.2)
+      %multiply.4 = f64[] multiply(f64[] %v_0.1, f64[] %add.3)
+      ROOT %tuple.5 = (f64[]) tuple(f64[] %multiply.4)
+    }
+    (Tensor 10)
+    |}];
   (* Two-argument function *)
   jit
+    ~print_hlo:true
     (module Treeable.Tuple2 (Value) (Value))
     (module Value)
     ~f:(fun (a, b) -> Value.O.(Value.sin a * Value.cos b))
     (Value.of_float 2., Value.of_float 3.)
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor -0.90019762973551742) |}]
+  [%expect
+    {|
+    HloModule xla_call.13, entry_computation_layout={(f64[],f64[])->(f64[])}
+
+    ENTRY %xla_call.13 (v_0.7: f64[], v_1.8: f64[]) -> (f64[]) {
+      %v_0.7 = f64[] parameter(0)
+      %sine.10 = f64[] sine(f64[] %v_0.7)
+      %v_1.8 = f64[] parameter(1)
+      %cosine.9 = f64[] cosine(f64[] %v_1.8)
+      %multiply.11 = f64[] multiply(f64[] %sine.10, f64[] %cosine.9)
+      ROOT %tuple.12 = (f64[]) tuple(f64[] %multiply.11)
+    }
+    (Tensor -0.90019762973551742)
+    |}]
 ;;
 
 let%expect_test "jit and matmul" =
   let a = Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] |> Value.of_tensor in
   let b = Tensor.of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] |> Value.of_tensor in
   jit
+    ~print_hlo:true
     (module Treeable.Tuple2 (Value) (Value))
     (module Value)
     ~f:(fun (a, b) -> Value.matmul a b)
     (a, b)
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor ((19 22) (43 50)) (dims (2 2))) |}]
+  [%expect
+    {|
+    HloModule xla_call.18, entry_computation_layout={(f64[2,2]{1,0},f64[2,2]{1,0})->(f64[2,2]{1,0})}
+
+    ENTRY %xla_call.18 (v_0.14: f64[2,2], v_1.15: f64[2,2]) -> (f64[2,2]) {
+      %v_0.14 = f64[2,2]{1,0} parameter(0)
+      %v_1.15 = f64[2,2]{1,0} parameter(1)
+      %dot.16 = f64[2,2]{1,0} dot(f64[2,2]{1,0} %v_0.14, f64[2,2]{1,0} %v_1.15), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+      ROOT %tuple.17 = (f64[2,2]{1,0}) tuple(f64[2,2]{1,0} %dot.16)
+    }
+    (Tensor ((19 22) (43 50)) (dims (2 2)))
+    |}]
 ;;
 
 let%expect_test "jit and sum" =
   jit'
+    ~print_hlo:true
     ~f:(fun x -> Value.sum x)
-    ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
+    (Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor 10) |}]
+  [%expect
+    {|
+    HloModule xla_call.27, entry_computation_layout={(f64[2,2]{1,0})->(f64[])}
+
+    %sum.21 (x.22: f64[], y.23: f64[]) -> f64[] {
+      %x.22 = f64[] parameter(0)
+      %y.23 = f64[] parameter(1)
+      ROOT %add.24 = f64[] add(f64[] %x.22, f64[] %y.23)
+    }
+
+    ENTRY %xla_call.27 (v_0.19: f64[2,2]) -> (f64[]) {
+      %v_0.19 = f64[2,2]{1,0} parameter(0)
+      %constant.20 = f64[] constant(0)
+      %reduce.25 = f64[] reduce(f64[2,2]{1,0} %v_0.19, f64[] %constant.20), dimensions={0,1}, to_apply=%sum.21
+      ROOT %tuple.26 = (f64[]) tuple(f64[] %reduce.25)
+    }
+    (Tensor 10)
+    |}]
 ;;
 
 let%expect_test "jit and broadcast" =
   jit'
+    ~print_hlo:true
     ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |])
-    ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
+    (Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2))) |}]
+  [%expect
+    {|
+    HloModule xla_call.31, entry_computation_layout={(f64[2,2]{1,0})->(f64[2,2,2]{2,1,0})}
+
+    ENTRY %xla_call.31 (v_0.28: f64[2,2]) -> (f64[2,2,2]) {
+      %v_0.28 = f64[2,2]{1,0} parameter(0)
+      %broadcast.29 = f64[2,2,2]{2,1,0} broadcast(f64[2,2]{1,0} %v_0.28), dimensions={1,2}
+      ROOT %tuple.30 = (f64[2,2,2]{2,1,0}) tuple(f64[2,2,2]{2,1,0} %broadcast.29)
+    }
+    (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2)))
+    |}]
 ;;
