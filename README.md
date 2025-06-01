@@ -33,9 +33,9 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
 - [ ] Print XLA HLO module
 - [ ] Add JIT caching story
 - [ ] Pytorch backend
-- [ ] Testing framework for diffing op backends (XLA, Pytorch, OCaml)
-  - [ ] Quickcheck generators
-  - [ ] Diff XLA backend and OCaml
+- [x] Testing framework for diffing op backends (XLA, Pytorch, OCaml)
+  - [x] Quickcheck generators
+  - [x] Diff XLA backend and OCaml
   - [ ] Diff OCaml/XLA vjp and Pytorch
 - [ ] Shape inference?
 - [ ] Mixed-precision support
