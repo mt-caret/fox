@@ -1,6 +1,6 @@
 (library
  (name fox_test)
  (inline_tests)
- (libraries core fox_core fox_jit)
+ (libraries core expect_test_helpers_core fox_core fox_jit)
  (preprocess
   (pps ppx_jane)))

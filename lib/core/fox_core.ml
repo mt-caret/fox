@@ -816,7 +816,11 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Unary ((Neg | Sin | Cos | Sqrt), _)
         | Binary ((Add | Sub | Mul | Div), _, _)
         | Matmul _ | Transpose _ | Sum _ | Broadcast _ ->
-          raise_s [%message "Invalid var/val op combination" (op : Expr.Atom.t Op.t)]
+          raise_s
+            [%message
+              "Invalid var/val op combination"
+                (op : Expr.Atom.t Op.t)
+                ~expr:(Expr.to_string_hum expr)]
       in
       ct_env)
   in
@@ -910,6 +914,10 @@ let%expect_test "grad" =
   let y' = Eval.handle ~f:(fun () -> f_vjp (Value.of_float 1.)) in
   print_s [%message "" (y : Value.t) (y' : Value.t)];
   [%expect {| ((y (Tensor 0.14112000805986721)) (y' (Tensor -0.98999249660044542))) |}];
+  Eval.handle ~f:(fun () -> grad' ~f:(fun x -> Value.O.(x * x)) ~x:(Value.of_float 3.))
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  [%expect {| (Tensor 6) |}];
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(fun x ->

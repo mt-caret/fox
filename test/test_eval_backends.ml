@@ -317,3 +317,57 @@ let%expect_test "eval expr vs xla" =
           (Value.to_tensor_exn eval_result)
           (Value.to_tensor_exn xla_result)))
 ;;
+
+(* TODO: fix combination of jit and grad *)
+let%expect_test "reproduction" =
+  let f value = grad' ~f:(fun value -> Value.O.(value * value)) ~x:value in
+  Eval.handle ~f:(fun () -> f (Value.of_float 1.)) |> [%sexp_of: Value.t] |> print_s;
+  [%expect {| (Tensor 2) |}];
+  Expect_test_helpers_core.require_does_raise [%here] (fun () ->
+    Fox_jit.jit' ~f ~x:(Value.of_float 1.) |> [%sexp_of: Value.t] |> print_s);
+  [%expect
+    {|
+    ("Invalid var/val op combination"
+      (op (
+        Binary Mul
+        (Var ((name a_0) (dims ())))
+        (Var ((name v_0) (dims ())))))
+      (expr
+       "a_0[] ->\np_0[] = mul v_0 a_0\np_1[] = mul a_0 v_0\np_2[] = add p_1 p_0\nin ( p_2 )"))
+    |}]
+;;
+
+let%expect_test "eval grad expr vs xla" =
+  Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
+  Expect_test_helpers_core.require_does_raise [%here] (fun () ->
+    Quickcheck.test
+      (fun_generator ~op_nums:1)
+      ~trials:300
+      ~sexp_of:(fun (value, expr) ->
+        [%sexp { value : Value.t; expr : string = Expr.to_string_hum expr }])
+      ~f:(fun (value, expr) ->
+        let f value =
+          grad' ~f:(fun value -> eval_expr' expr value |> Value.sum) ~x:value
+        in
+        let eval_result = Eval.handle ~f:(fun () -> f value) in
+        let xla_result = Fox_jit.jit' ~f ~x:value in
+        assert (
+          Tensor.tensor_equal
+            (Value.to_tensor_exn eval_result)
+            (Value.to_tensor_exn xla_result))));
+  [%expect
+    {|
+    ("Base_quickcheck.Test.run: test failed"
+      (input (
+        (value (Tensor -1.6846339859241422E+60))
+        (expr "arg[] ->\nv_0[] = mul arg arg\nin ( v_0 )")))
+      (error (
+        "Invalid var/val op combination"
+        (op (
+          Binary Mul
+          (Var ((name a_0) (dims ())))
+          (Var ((name v_0) (dims ())))))
+        (expr
+         "a_0[] ->\np_0[] = mul v_0 a_0\np_1[] = mul a_0 v_0\np_2[] = add p_1 p_0\np_3[] = sum p_2 dims=all keep_dims=false\nin ( p_3 )"))))
+    |}]
+;;
