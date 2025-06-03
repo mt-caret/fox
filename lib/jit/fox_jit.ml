@@ -35,6 +35,7 @@ let xla_subcomp
             | Sin -> Xla.Op.sin
             | Cos -> Xla.Op.cos
             | Sqrt -> Xla.Op.sqrt
+            | Exp -> Xla.Op.exp
           in
           f a
         | Binary (kind, (a, _), (b, _)) ->

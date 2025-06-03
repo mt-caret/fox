@@ -54,7 +54,28 @@ let create_uninitialized dims =
 ;;
 
 let init ~dims ~f = Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims f
-let reshape t ~dims = Bigarray.reshape t dims
+
+let reshape t ~dims =
+  match Array.count dims ~f:(fun dim -> dim = -1) with
+  | 0 -> Bigarray.reshape t dims
+  | 1 ->
+    let length_without_unknown_dim =
+      Array.filter dims ~f:(fun dim -> dim <> -1) |> Array.fold ~init:1 ~f:( * )
+    in
+    let length = length t in
+    (match length % length_without_unknown_dim with
+     | 0 ->
+       let dims =
+         Array.map dims ~f:(fun dim ->
+           if dim = -1 then length / length_without_unknown_dim else dim)
+       in
+       Bigarray.reshape t dims
+     | _ ->
+       raise_s
+         [%message
+           "reshape: no valid implicit dimension" (length : int) (dims : int array)])
+  | _ -> raise_s [%message "reshape: more than one -1 in dims" (dims : int array)]
+;;
 
 (* TODO: write a ppx that allows writing [5t] or [5.5t] which expands to
    [Tensor.of_float (Int.to_float 5)] and [Tensor.of_float 5.5]. See
@@ -204,6 +225,7 @@ include Op.Make_operators (struct
           | Sin -> Float.sin
           | Cos -> Float.cos
           | Sqrt -> Float.sqrt
+          | Exp -> Float.exp
         in
         map t ~f
       | Binary (kind, t1, t2) ->
@@ -386,6 +408,12 @@ module With_shape = struct
   type nonrec t = t
 
   let sexp_of_t t = [%sexp { dims : int array = dims t; tensor : t = t }]
+end
+
+module Just_shape = struct
+  type nonrec t = t
+
+  let sexp_of_t t = [%sexp_of: int array] (dims t)
 end
 
 module Private = struct

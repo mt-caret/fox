@@ -7,6 +7,7 @@ module type S = sig
   val sin : t -> t
   val cos : t -> t
   val sqrt : t -> t
+  val exp : t -> t
   val add : t -> t -> t
   val sub : t -> t -> t
   val mul : t -> t -> t

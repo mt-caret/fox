@@ -37,6 +37,7 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
   - [x] Quickcheck generators
   - [x] Diff XLA backend and OCaml
   - [ ] Diff OCaml/XLA vjp and Pytorch
+- [ ] Support various types (ints, bools, etc.)
 - [ ] Shape inference?
 - [ ] Mixed-precision support
 - [ ] Custom operator support

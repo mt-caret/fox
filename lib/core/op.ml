@@ -6,6 +6,7 @@ module Unary = struct
     | Sin
     | Cos
     | Sqrt
+    | Exp
   [@@deriving sexp, enumerate]
 
   let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
@@ -66,6 +67,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
       | Sin -> M.sin
       | Cos -> M.cos
       | Sqrt -> M.sqrt
+      | Exp -> M.exp
     in
     f a
   | Binary (kind, a, b) ->
@@ -111,7 +113,7 @@ let to_string t ~f =
 
 let infer_dims t =
   match t with
-  | Unary ((Neg | Sin | Cos | Sqrt), dims) -> Ok dims
+  | Unary ((Neg | Sin | Cos | Sqrt | Exp), dims) -> Ok dims
   | Binary ((Add | Sub | Mul | Div), dims1, dims2) ->
     let%map.Or_error () =
       if [%equal: int array] dims1 dims2
@@ -226,6 +228,7 @@ module Make_operators (M : sig
   let sin a = eval (Unary (Sin, a))
   let cos a = eval (Unary (Cos, a))
   let sqrt a = eval (Unary (Sqrt, a))
+  let exp a = eval (Unary (Exp, a))
   let add a b = eval (Binary (Add, a, b))
   let sub a b = eval (Binary (Sub, a, b))
   let mul a b = eval (Binary (Mul, a, b))

@@ -45,6 +45,10 @@ module With_shape : sig
   type nonrec t = t [@@deriving sexp_of]
 end
 
+module Just_shape : sig
+  type nonrec t = t [@@deriving sexp_of]
+end
+
 module Private : sig
   val to_bigarray
     :  t
