@@ -7,6 +7,7 @@ module Unary = struct
     | Cos
     | Sqrt
     | Exp
+    | Sigmoid
   [@@deriving sexp, enumerate]
 
   let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
@@ -68,6 +69,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
       | Cos -> M.cos
       | Sqrt -> M.sqrt
       | Exp -> M.exp
+      | Sigmoid -> M.sigmoid
     in
     f a
   | Binary (kind, a, b) ->
@@ -113,7 +115,7 @@ let to_string t ~f =
 
 let infer_dims t =
   match t with
-  | Unary ((Neg | Sin | Cos | Sqrt | Exp), dims) -> Ok dims
+  | Unary ((Neg | Sin | Cos | Sqrt | Exp | Sigmoid), dims) -> Ok dims
   | Binary ((Add | Sub | Mul | Div), dims1, dims2) ->
     let%map.Or_error () =
       if [%equal: int array] dims1 dims2
@@ -229,6 +231,7 @@ module Make_operators (M : sig
   let cos a = eval (Unary (Cos, a))
   let sqrt a = eval (Unary (Sqrt, a))
   let exp a = eval (Unary (Exp, a))
+  let sigmoid a = eval (Unary (Sigmoid, a))
   let add a b = eval (Binary (Add, a, b))
   let sub a b = eval (Binary (Sub, a, b))
   let mul a b = eval (Binary (Mul, a, b))
@@ -249,11 +252,6 @@ module Make_operators (M : sig
     let ( * ) = mul
     let ( / ) = div
   end
-
-  let sigmoid a =
-    let one = M.of_float 1. |> broadcast ~dims:(M.dims a) in
-    O.(one / (one + exp (-a)))
-  ;;
 
   let scale value float = O.(value * broadcast (M.of_float float) ~dims:(M.dims value))
   let length value = Array.fold (M.dims value) ~init:1 ~f:( * )

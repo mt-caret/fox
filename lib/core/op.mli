@@ -7,6 +7,7 @@ module Unary : sig
     | Cos
     | Sqrt
     | Exp
+    | Sigmoid
   [@@deriving sexp, enumerate]
 end
 

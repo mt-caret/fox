@@ -233,6 +233,11 @@ include Op.Make_operators (struct
           | Cos -> Float.cos
           | Sqrt -> Float.sqrt
           | Exp -> Float.exp
+          | Sigmoid ->
+            fun x ->
+              if Float.is_non_negative x
+              then 1. /. (1. +. Float.exp (-.x))
+              else Float.exp x /. (1. +. Float.exp x)
         in
         map t ~f
       | Binary (kind, t1, t2) ->

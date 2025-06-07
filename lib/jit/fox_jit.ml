@@ -36,6 +36,18 @@ let xla_subcomp
             | Cos -> Xla.Op.cos
             | Sqrt -> Xla.Op.sqrt
             | Exp -> Xla.Op.exp
+            | Sigmoid ->
+              fun x ->
+                let one =
+                  Tensor.ones ~dims:(Xla.Op.dims x)
+                  |> tensor_to_xla_literal
+                  |> Xla.Op.constant ~builder
+                in
+                let is_non_negative = Xla.Op.ge x (Xla.Op.zeros_like x) in
+                Xla.Op.select
+                  ~mask:is_non_negative
+                  ~on_true:(Xla.Op.div one (Xla.Op.add one (Xla.Op.exp (Xla.Op.neg x))))
+                  ~on_false:(Xla.Op.div (Xla.Op.exp x) (Xla.Op.add one (Xla.Op.exp x)))
           in
           f a
         | Binary (kind, (a, _), (b, _)) ->

@@ -107,6 +107,16 @@ module Jvp = struct
             t
             ~primal:(Value.exp a.primal)
             ~tangent:Value.O.(Value.exp a.primal * a.tangent)
+        | Unary (Sigmoid, a) ->
+          dual_number
+            t
+            ~primal:(Value.sigmoid a.primal)
+            ~tangent:
+              Value.O.(
+                Value.sigmoid a.primal
+                * ((Value.of_float 1. |> Value.broadcast ~dims:(Value.dims a.primal))
+                   - Value.sigmoid a.primal)
+                * a.tangent)
         | Binary (Add, a, b) ->
           dual_number
             t
@@ -526,7 +536,7 @@ module Partial = struct
         | Transpose (Known a) -> Known (Value.transpose a)
         | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
         | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
-        | ( Unary ((Neg | Sin | Cos | Sqrt | Exp), _)
+        | ( Unary ((Neg | Sin | Cos | Sqrt | Exp | Sigmoid), _)
           | Binary ((Add | Sub | Mul | Div), _, _)
           | Matmul _ | Transpose _ | Sum _ | Broadcast _ ) as op ->
           let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims_exn in
@@ -843,7 +853,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
                ~dims:(`Just non_padded_broadcasts)
                ~keep_dims:true)
           |> accum_gradient ~ct_env var
-        | Unary ((Neg | Sin | Cos | Sqrt | Exp), _)
+        | Unary ((Neg | Sin | Cos | Sqrt | Exp | Sigmoid), _)
         | Binary ((Add | Sub | Mul | Div), _, _)
         | Matmul _ | Transpose _ | Sum _ | Broadcast _ ->
           raise_s

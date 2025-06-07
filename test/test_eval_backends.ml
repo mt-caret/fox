@@ -93,6 +93,7 @@ module Op = struct
       | Cos
       | Sqrt
       | Exp
+      | Sigmoid
     [@@deriving quickcheck]
   end
 
@@ -279,7 +280,7 @@ let%expect_test "expr_generator" =
     ( v_1 )
     --------------------------------
     arg[5] ->
-    v_0[5] = sin arg;
+    v_0[5] = cos arg;
     v_1[5] = sub v_0 v_0;
     v_2[5] = div arg arg;
     ( v_2 )
@@ -293,10 +294,10 @@ let%expect_test "expr_generator" =
     --------------------------------
     arg[4] ->
     v_0[4] = div arg arg;
-    v_1[4] = cos arg;
+    v_1[4] = sqrt arg;
     v_2[4] = sin v_0;
     v_3[1] = sum arg dims=all keep_dims=true;
-    v_4[4] = exp v_0;
+    v_4[4] = sigmoid v_0;
     ( v_4 )
     --------------------------------
     |}]
