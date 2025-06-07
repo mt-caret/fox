@@ -18,11 +18,11 @@ end
 module type Of_typed_fields_arg = sig
   type t
 
-  module Typed_fields : Typed_fields_lib.S with type derived_on = t
+  module Typed_field : Typed_fields_lib.S with type derived_on = t
 
   val field_treeable
-    :  'a Typed_fields.t
-    -> (t -> Value_tree.t) * (module S with type t = 'a)
+    :  'a Typed_field.t
+    -> ('a -> Value_tree.t) * (module S with type t = 'a)
 end
 
 module type Treeable = sig

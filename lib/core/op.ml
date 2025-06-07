@@ -250,6 +250,11 @@ module Make_operators (M : sig
     let ( / ) = div
   end
 
+  let sigmoid a =
+    let one = M.of_float 1. |> broadcast ~dims:(M.dims a) in
+    O.(one / (one + exp (-a)))
+  ;;
+
   let scale value float = O.(value * broadcast (M.of_float float) ~dims:(M.dims value))
   let length value = Array.fold (M.dims value) ~init:1 ~f:( * )
 
@@ -275,5 +280,14 @@ module Make_operators (M : sig
 
   let std ?dims ?keep_dims ?correction value =
     var ?dims ?keep_dims ?correction value |> sqrt
+  ;;
+
+  let softmax ~dim value =
+    let exp_value = exp value in
+    let sum_exp_value =
+      sum exp_value ~dims:(`Just [ dim ]) ~keep_dims:true
+      |> broadcast ~dims:(M.dims value)
+    in
+    O.(exp_value / sum_exp_value)
   ;;
 end

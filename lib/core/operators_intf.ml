@@ -8,6 +8,7 @@ module type S = sig
   val cos : t -> t
   val sqrt : t -> t
   val exp : t -> t
+  val sigmoid : t -> t
   val add : t -> t -> t
   val sub : t -> t -> t
   val mul : t -> t -> t
@@ -31,6 +32,7 @@ module type S = sig
     -> t
     -> t
 
+  val softmax : dim:int -> t -> t
   val broadcast : t -> dims:int array -> t
   val scale : t -> float -> t
 

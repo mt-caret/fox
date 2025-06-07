@@ -13,19 +13,20 @@ module Of_typed_fields (T : Of_typed_fields_arg) : S with type t := T.t = struct
   include T
 
   let tree_of_t t =
-    List.map Typed_fields.Packed.all ~f:(fun { f = T field } ->
-      let name = Typed_fields.name field in
+    List.map Typed_field.Packed.all ~f:(fun { f = T field } ->
+      let name = Typed_field.name field in
       let to_tree, _ = field_treeable field in
-      name, to_tree t)
+      let tree = Typed_field.get field t |> to_tree in
+      name, tree)
     |> String.Map.of_alist_exn
     |> Value_tree.node
   ;;
 
   let t_of_tree (tree : Value_tree.t) =
-    Typed_fields.create
+    Typed_field.create
       { f =
-          (fun (type a) (field : a Typed_fields.t) ->
-            let name = Typed_fields.name field in
+          (fun (type a) (field : a Typed_field.t) ->
+            let name = Typed_field.name field in
             let _, (module T) = field_treeable field in
             T.t_of_tree (Value_tree.get_exn tree name))
       }

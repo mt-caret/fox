@@ -128,7 +128,7 @@ module Jvp = struct
             ~primal:Value.O.(a.primal / b.primal)
             ~tangent:
               Value.O.(
-                ((a.tangent * b.primal) - (a.primal * b.tangent)) / (a.primal * a.primal))
+                ((a.tangent * b.primal) - (a.primal * b.tangent)) / (b.primal * b.primal))
         | Matmul (a, b) ->
           dual_number
             t
@@ -653,19 +653,22 @@ let linearize
       let out_primal_tree = Out.tree_of_t out_primal in
       let out_tree_def = Value_tree.to_def out_primal_tree in
       let out_tangent_tree = Out.tree_of_t out_tangent in
+      [%test_eq: Value_tree.Def.t] out_tree_def (Value_tree.to_def out_tangent_tree);
       ( List.append
           (Value_tree.flatten out_primal_tree)
           (Value_tree.flatten out_tangent_tree)
       , out_tree_def ))
   in
-  let outputs = List.take outputs primals_length in
+  let outputs = List.take outputs (List.length outputs / 2) in
   let output =
     List.filter_map outputs ~f:(function
       | Partial_value.Known value -> Some value
       | Unknown _ ->
         raise_s
           [%message
-            "unexpected unknown primal" (outputs : Partial_value.t list) (expr : Expr.t)])
+            "unexpected unknown primal"
+              (outputs : Partial_value.t list)
+              ~expr:(Expr.to_string_hum expr)])
     |> Value_tree.unflatten ~def:expr.out_tree_def
     |> Out.t_of_tree
   in
@@ -889,19 +892,22 @@ let vjp
       let out_primal_tree = Out.tree_of_t out_primal in
       let out_tree_def = Value_tree.to_def out_primal_tree in
       let out_tangent_tree = Out.tree_of_t out_tangent in
+      [%test_eq: Value_tree.Def.t] out_tree_def (Value_tree.to_def out_tangent_tree);
       ( List.append
           (Value_tree.flatten out_primal_tree)
           (Value_tree.flatten out_tangent_tree)
       , out_tree_def ))
   in
-  let outputs = List.take outputs primals_length in
+  let outputs = List.take outputs (List.length outputs / 2) in
   let output =
     List.filter_map outputs ~f:(function
       | Partial_value.Known value -> Some value
       | Unknown _ ->
         raise_s
           [%message
-            "unexpected unknown primal" (outputs : Partial_value.t list) (expr : Expr.t)])
+            "unexpected unknown primal"
+              (outputs : Partial_value.t list)
+              ~expr:(Expr.to_string_hum expr)])
     |> Value_tree.unflatten ~def:expr.out_tree_def
     |> Out.t_of_tree
   in
@@ -922,14 +928,21 @@ let vjp
 
 let vjp' ~f ~primal = vjp (module Value) (module Value) ~f ~primals:primal
 
-let grad
+let grad_and_value
       (type in_)
       (module In : Treeable_intf.S with type t = in_)
       ~(f : in_ -> Value.t)
       ~x
   =
-  let _y, f_vjp = vjp (module In) (module Value) ~f ~primals:x in
-  f_vjp (Value.of_float 1.)
+  let y, f_vjp = vjp (module In) (module Value) ~f ~primals:x in
+  y, f_vjp (Value.of_float 1.)
+;;
+
+let grad_and_value' ~f ~x = grad_and_value (module Value) ~f ~x
+
+let grad module_ ~f ~x =
+  let _y, grad = grad_and_value module_ ~f ~x in
+  grad
 ;;
 
 let grad' ~f ~x = grad (module Value) ~f ~x

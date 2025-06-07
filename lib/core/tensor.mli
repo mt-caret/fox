@@ -12,6 +12,8 @@ val item : t -> float
 val get : t -> int array -> float
 val set : t -> int array -> float -> unit
 val fill : t -> float -> unit
+val left_slice : t -> indices:int array -> t
+val sub_left : t -> pos:int -> len:int -> t
 val reshape : t -> dims:int array -> t
 val of_float : float -> t
 val of_list : float list -> t

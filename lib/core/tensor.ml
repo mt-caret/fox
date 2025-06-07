@@ -26,6 +26,10 @@ let rec sexp_of_t t =
     |> [%sexp_of: Sexp.t list]
 ;;
 
+let sexp_of_t t =
+  if length t > 30 then [%sexp { dims : int array = dims t }] else sexp_of_t t
+;;
+
 (* TODO: I'm pretty sure this doesn't give you a meaningful total order, but
    that's fine, we just use it for a binary search tree. *)
 let rec compare t1 t2 =
@@ -76,6 +80,9 @@ let reshape t ~dims =
            "reshape: no valid implicit dimension" (length : int) (dims : int array)])
   | _ -> raise_s [%message "reshape: more than one -1 in dims" (dims : int array)]
 ;;
+
+let left_slice t ~indices = Bigarray.Genarray.slice_left t indices
+let sub_left t ~pos ~len = Bigarray.Genarray.sub_left t pos len
 
 (* TODO: write a ppx that allows writing [5t] or [5.5t] which expands to
    [Tensor.of_float (Int.to_float 5)] and [Tensor.of_float 5.5]. See
