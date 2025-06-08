@@ -93,6 +93,7 @@ module Op = struct
       | Cos
       | Sqrt
       | Exp
+      | Log
       | Sigmoid
     [@@deriving quickcheck]
   end
@@ -128,6 +129,10 @@ module Op = struct
         ; keep_dims : bool
         }
     | Broadcast of
+        { value : 'value
+        ; dims : Dims.t
+        }
+    | Reshape of
         { value : 'value
         ; dims : Dims.t
         }
@@ -222,17 +227,18 @@ let op_generator ~values_by_dims =
           | all_dims ->
             let%map value = choose all_dims >>| Map.find_exn values_by_dims >>= choose in
             Some (Op.Sum { value; dims = `Just dims; keep_dims = true })))
-    | Broadcast { value = (); dims } ->
+    | (Broadcast { value = (); dims = _ } | Reshape { value = (); dims = _ }) as op ->
       (match
          Map.keys values_by_dims
          |> List.filter ~f:(fun input_dims ->
-           Fox_core.Op.infer_dims (Broadcast { value = input_dims; dims })
+           Fox_core.Op.map op ~f:(fun () -> input_dims)
+           |> Fox_core.Op.infer_dims
            |> Or_error.is_ok)
        with
        | [] -> return None
        | all_dims ->
          let%map value = choose all_dims >>| Map.find_exn values_by_dims >>= choose in
-         Some (Op.Broadcast { value; dims })))
+         Some (Fox_core.Op.map op ~f:(fun () -> value))))
 ;;
 
 let expr_generator ~op_nums =
@@ -280,24 +286,24 @@ let%expect_test "expr_generator" =
     ( v_1 )
     --------------------------------
     arg[5] ->
-    v_0[5] = cos arg;
-    v_1[5] = sub v_0 v_0;
-    v_2[5] = div arg arg;
+    v_0[5] = sub arg arg;
+    v_1[5] = div v_0 v_0;
+    v_2[5] = cos v_0;
     ( v_2 )
     --------------------------------
-    arg[5] ->
-    v_0[5] = mul arg arg;
-    v_1[5] = div v_0 arg;
-    v_2[1] = sum v_1 dims=all keep_dims=true;
-    v_3[2,1,1,3,1] = broadcast v_2 dims=[2, 1, 1, 3, 1];
+    arg[4] ->
+    v_0[4] = sub arg arg;
+    v_1[4] = div arg arg;
+    v_2[4] = div arg v_0;
+    v_3[4] = div v_1 arg;
     ( v_3 )
     --------------------------------
     arg[4] ->
     v_0[4] = div arg arg;
-    v_1[4] = sqrt arg;
-    v_2[4] = sin v_0;
-    v_3[1] = sum arg dims=all keep_dims=true;
-    v_4[4] = sigmoid v_0;
+    v_1[4] = sin v_0;
+    v_2[4] = reshape arg dims=[4];
+    v_3[4] = mul v_2 v_2;
+    v_4[4] = div v_2 arg;
     ( v_4 )
     --------------------------------
     |}]

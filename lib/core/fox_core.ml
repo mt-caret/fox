@@ -107,6 +107,11 @@ module Jvp = struct
             t
             ~primal:(Value.exp a.primal)
             ~tangent:Value.O.(Value.exp a.primal * a.tangent)
+        | Unary (Log, a) ->
+          dual_number
+            t
+            ~primal:(Value.log a.primal)
+            ~tangent:(Value.div a.tangent a.primal)
         | Unary (Sigmoid, a) ->
           dual_number
             t
@@ -160,6 +165,11 @@ module Jvp = struct
             t
             ~primal:(Value.broadcast ~dims value.primal)
             ~tangent:(Value.broadcast ~dims value.tangent)
+        | Reshape { value; dims } ->
+          dual_number
+            t
+            ~primal:(Value.reshape value.primal ~dims)
+            ~tangent:(Value.reshape value.tangent ~dims)
       in
       continue k (Dual_number.to_value result)
   ;;
@@ -536,9 +546,10 @@ module Partial = struct
         | Transpose (Known a) -> Known (Value.transpose a)
         | Sum { value = Known a; dims; keep_dims } -> Known (Value.sum a ~dims ~keep_dims)
         | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
-        | ( Unary ((Neg | Sin | Cos | Sqrt | Exp | Sigmoid), _)
+        | Reshape { value = Known a; dims } -> Known (Value.reshape a ~dims)
+        | ( Unary ((Neg | Sin | Cos | Sqrt | Exp | Log | Sigmoid), _)
           | Binary ((Add | Sub | Mul | Div), _, _)
-          | Matmul _ | Transpose _ | Sum _ | Broadcast _ ) as op ->
+          | Matmul _ | Transpose _ | Sum _ | Broadcast _ | Reshape _ ) as op ->
           let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims_exn in
           let binder = fresh_var t ~dims in
           t.equations
@@ -824,8 +835,18 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Matmul (Value v, Var var) ->
           accum_gradient ~ct_env var (Value.matmul (Value.transpose v) cotangent)
         | Transpose (Var var) -> accum_gradient ~ct_env var (Value.transpose cotangent)
-        | Sum { value = Var var; dims = _; keep_dims = _ } ->
-          Value.broadcast cotangent ~dims:(Expr.Var.dims var)
+        | Sum { value = Var var; dims; keep_dims } ->
+          let var_dims = Expr.Var.dims var in
+          (match keep_dims with
+           | true -> cotangent
+           | false ->
+             (* When dims aren't kept, there are situations where broadcasting to the input
+                dimension doesn't work e.g. a sum s.t. [ 2; 3 ] -> [ 2 ] *)
+             let dims_if_dims_were_kept =
+               Op.infer_dims_exn (Op.Sum { value = var_dims; dims; keep_dims = true })
+             in
+             Value.reshape cotangent ~dims:dims_if_dims_were_kept)
+          |> Value.broadcast ~dims:var_dims
           |> accum_gradient ~ct_env var
         | Broadcast { value = Var var; dims = to_dims } ->
           let from_dims = Expr.Var.dims var in
@@ -853,9 +874,11 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
                ~dims:(`Just non_padded_broadcasts)
                ~keep_dims:true)
           |> accum_gradient ~ct_env var
-        | Unary ((Neg | Sin | Cos | Sqrt | Exp | Sigmoid), _)
+        | Reshape { value = Var var; dims = _ } ->
+          Value.reshape cotangent ~dims:(Expr.Var.dims var) |> accum_gradient ~ct_env var
+        | Unary ((Neg | Sin | Cos | Sqrt | Exp | Log | Sigmoid), _)
         | Binary ((Add | Sub | Mul | Div), _, _)
-        | Matmul _ | Transpose _ | Sum _ | Broadcast _ ->
+        | Matmul _ | Transpose _ | Sum _ | Broadcast _ | Reshape _ ->
           raise_s
             [%message
               "Invalid var/val op combination"
@@ -922,16 +945,23 @@ let vjp
     |> Out.t_of_tree
   in
   let f_vjp (cotangents : out) =
-    let cotangents_tree = Out.tree_of_t cotangents in
-    [%test_result: Value_tree.Def.t]
-      (Value_tree.to_def cotangents_tree)
-      ~expect:expr.out_tree_def;
-    eval_expr_transposed
-      expr
-      tangent_vars
-      ~cotangents:(Value_tree.flatten cotangents_tree)
-    |> Value_tree.unflatten ~def:primals_tree_def
-    |> In.t_of_tree
+    match
+      let cotangents_tree = Out.tree_of_t cotangents in
+      [%test_result: Value_tree.Def.t]
+        (Value_tree.to_def cotangents_tree)
+        ~expect:expr.out_tree_def;
+      eval_expr_transposed
+        expr
+        tangent_vars
+        ~cotangents:(Value_tree.flatten cotangents_tree)
+      |> Value_tree.unflatten ~def:primals_tree_def
+      |> In.t_of_tree
+    with
+    | in_ -> in_
+    | exception exn ->
+      Exn.reraise
+        exn
+        (Sexp.to_string_hum [%message (exn : exn) ~expr:(Expr.to_string_hum expr)])
   in
   output, f_vjp
 ;;
@@ -983,5 +1013,13 @@ let%expect_test "grad" =
       ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ])))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor ((1 1) (1 1)) (dims (2 2))) |}]
+  [%expect {| (Tensor ((1 1) (1 1)) (dims (2 2))) |}];
+  Eval.handle ~f:(fun () ->
+    grad'
+      ~f:(fun x ->
+        Value.broadcast x ~dims:[| 3; 4 |] |> Value.sum ~dims:(`Just [ 1 ]) |> Value.mean)
+      ~x:(Value.of_tensor (Tensor.arange 4)))
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  [%expect {| (Tensor (1 1 1 1) (dims (4))) |}]
 ;;

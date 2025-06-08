@@ -7,6 +7,7 @@ module Unary = struct
     | Cos
     | Sqrt
     | Exp
+    | Log
     | Sigmoid
   [@@deriving sexp, enumerate]
 
@@ -38,6 +39,10 @@ type 'value t =
       { value : 'value
       ; dims : int array
       }
+  | Reshape of
+      { value : 'value
+      ; dims : int array
+      }
 [@@deriving sexp_of, variants]
 
 let map t ~f =
@@ -48,6 +53,7 @@ let map t ~f =
   | Transpose a -> Transpose (f a)
   | Sum { value; dims; keep_dims } -> Sum { value = f value; dims; keep_dims }
   | Broadcast { value; dims } -> Broadcast { value = f value; dims }
+  | Reshape { value; dims } -> Reshape { value = f value; dims }
 ;;
 
 let to_list = function
@@ -57,6 +63,7 @@ let to_list = function
   | Transpose a -> [ a ]
   | Sum { value; dims = _; keep_dims = _ } -> [ value ]
   | Broadcast { value; dims = _ } -> [ value ]
+  | Reshape { value; dims = _ } -> [ value ]
 ;;
 
 let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
@@ -69,6 +76,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
       | Cos -> M.cos
       | Sqrt -> M.sqrt
       | Exp -> M.exp
+      | Log -> M.log
       | Sigmoid -> M.sigmoid
     in
     f a
@@ -85,6 +93,7 @@ let eval (type a) (module M : Operators_intf.S with type t = a) (t : a t) =
   | Transpose a -> M.transpose a
   | Sum { value; dims; keep_dims } -> M.sum value ~dims ~keep_dims
   | Broadcast { value; dims } -> M.broadcast value ~dims
+  | Reshape { value; dims } -> M.reshape value ~dims
 ;;
 
 let to_string t ~f =
@@ -111,11 +120,16 @@ let to_string t ~f =
       Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
     in
     [%string "broadcast %{f value} dims=[%{dims}]"]
+  | Reshape { value; dims } ->
+    let dims =
+      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+    in
+    [%string "reshape %{f value} dims=[%{dims}]"]
 ;;
 
 let infer_dims t =
   match t with
-  | Unary ((Neg | Sin | Cos | Sqrt | Exp | Sigmoid), dims) -> Ok dims
+  | Unary ((Neg | Sin | Cos | Sqrt | Exp | Log | Sigmoid), dims) -> Ok dims
   | Binary ((Add | Sub | Mul | Div), dims1, dims2) ->
     let%map.Or_error () =
       if [%equal: int array] dims1 dims2
@@ -204,6 +218,31 @@ let infer_dims t =
       else Or_error.error_s [%message "infer_dims: can't broadcast" ~op:(t : int array t)]
     in
     Ok to_dims
+  | Reshape { value = from_dims; dims = to_dims } ->
+    let from_dims_elements = Array.fold from_dims ~init:1 ~f:( * ) in
+    (match Array.count to_dims ~f:(fun dim -> dim = -1) with
+     | 0 ->
+       let to_dims_elements = Array.fold to_dims ~init:1 ~f:( * ) in
+       if from_dims_elements <> to_dims_elements
+       then Or_error.error_s [%message "infer_dims: can't reshape" ~op:(t : int array t)]
+       else Ok to_dims
+     | 1 ->
+       let length_without_unknown_dim =
+         Array.filter to_dims ~f:(fun dim -> dim <> -1) |> Array.fold ~init:1 ~f:( * )
+       in
+       (match from_dims_elements % length_without_unknown_dim with
+        | 0 ->
+          let dims =
+            Array.map to_dims ~f:(fun dim ->
+              if dim = -1 then from_dims_elements / length_without_unknown_dim else dim)
+          in
+          Ok dims
+        | _ ->
+          Or_error.error_s
+            [%message "infer_dims: no valid implicit dimension" ~op:(t : int array t)])
+     | _ ->
+       Or_error.error_s
+         [%message "infer_dims: more than one -1 in dims" ~op:(t : int array t)])
 ;;
 
 let infer_dims_exn t = infer_dims t |> ok_exn
@@ -231,6 +270,7 @@ module Make_operators (M : sig
   let cos a = eval (Unary (Cos, a))
   let sqrt a = eval (Unary (Sqrt, a))
   let exp a = eval (Unary (Exp, a))
+  let log a = eval (Unary (Log, a))
   let sigmoid a = eval (Unary (Sigmoid, a))
   let add a b = eval (Binary (Add, a, b))
   let sub a b = eval (Binary (Sub, a, b))
@@ -244,6 +284,7 @@ module Make_operators (M : sig
   ;;
 
   let broadcast value ~dims = eval (Broadcast { value; dims })
+  let reshape value ~dims = eval (Reshape { value; dims })
 
   module O = struct
     let ( ~- ) = neg
@@ -280,6 +321,7 @@ module Make_operators (M : sig
     var ?dims ?keep_dims ?correction value |> sqrt
   ;;
 
+  (* TODO: subtract max to avoid overflow *)
   let softmax ~dim value =
     let exp_value = exp value in
     let sum_exp_value =

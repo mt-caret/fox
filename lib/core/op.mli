@@ -7,6 +7,7 @@ module Unary : sig
     | Cos
     | Sqrt
     | Exp
+    | Log
     | Sigmoid
   [@@deriving sexp, enumerate]
 end
@@ -31,6 +32,10 @@ type 'value t =
       ; keep_dims : bool
       }
   | Broadcast of
+      { value : 'value
+      ; dims : int array
+      }
+  | Reshape of
       { value : 'value
       ; dims : int array
       }

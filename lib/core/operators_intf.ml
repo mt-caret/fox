@@ -8,6 +8,7 @@ module type S = sig
   val cos : t -> t
   val sqrt : t -> t
   val exp : t -> t
+  val log : t -> t
   val sigmoid : t -> t
   val add : t -> t -> t
   val sub : t -> t -> t
@@ -15,6 +16,7 @@ module type S = sig
   val div : t -> t -> t
   val matmul : t -> t -> t
   val transpose : t -> t
+  val reshape : t -> dims:int array -> t
   val sum : ?dims:[ `Just of int Nonempty_list.t | `All ] -> ?keep_dims:bool -> t -> t
   val mean : ?dims:[ `Just of int Nonempty_list.t | `All ] -> ?keep_dims:bool -> t -> t
 

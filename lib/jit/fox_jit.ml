@@ -36,6 +36,7 @@ let xla_subcomp
             | Cos -> Xla.Op.cos
             | Sqrt -> Xla.Op.sqrt
             | Exp -> Xla.Op.exp
+            | Log -> Xla.Op.log
             | Sigmoid ->
               fun x ->
                 let one =
@@ -76,6 +77,7 @@ let xla_subcomp
             value
             ~out_dims
             ~broadcast_dims:(Array.mapi in_dims ~f:(fun i _ -> padding_length + i))
+        | Reshape { value = value, _; dims } -> Xla.Op.reshape value ~dims
       in
       let dims = Op.map op ~f:snd |> Op.infer_dims_exn in
       Map.add_exn env ~key:var ~data:(xla_op, dims))

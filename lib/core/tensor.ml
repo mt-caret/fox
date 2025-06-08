@@ -59,6 +59,8 @@ let create_uninitialized dims =
 
 let init ~dims ~f = Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims f
 
+(* TODO: it's a bit sad that we duplicate this checking logic with
+   [Op.infer_dims]; is there a way to reduce the duplication here...? *)
 let reshape t ~dims =
   match Array.count dims ~f:(fun dim -> dim = -1) with
   | 0 -> Bigarray.reshape t dims
@@ -233,6 +235,7 @@ include Op.Make_operators (struct
           | Cos -> Float.cos
           | Sqrt -> Float.sqrt
           | Exp -> Float.exp
+          | Log -> Float.log
           | Sigmoid ->
             fun x ->
               if Float.is_non_negative x
@@ -312,6 +315,7 @@ include Op.Make_operators (struct
               if from_dim = 1 then 0 else index_dim)
           in
           get t from_index)
+      | Reshape { value = t; dims = to_dims } -> reshape t ~dims:to_dims
     ;;
 
     let dims = dims
@@ -386,7 +390,7 @@ let normal ?(mean = 0.) ?(std = 1.) ~dims ~rng () =
     match Float.O.(r2 >= 1. || r2 = 0.) with
     | true -> rejection_sample_unit_normal rng
     | false ->
-      let f = Float.sqrt (-2. *. log r2 /. r2) *. std in
+      let f = Float.sqrt (-2. *. Float.log r2 /. r2) *. std in
       (f *. x1) +. mean, (f *. x2) +. mean
   in
   let next = ref None in
