@@ -138,6 +138,8 @@ let command =
   @@
   let%map_open.Command () = Command.Param.return () in
   fun () ->
+    (* Suppresses noisy XLA log message *)
+    Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
     let train =
       Dataset.load ~x:"mnist/train-images-idx3-ubyte" ~y:"mnist/train-labels-idx1-ubyte"
     in
@@ -164,11 +166,16 @@ let command =
             if label = index.(1) then 1. else 0.)
         |> Value.of_tensor
       in
-      let loss = Eval.handle ~f:(fun () -> Model.cross_entropy_loss !model ~x ~y) in
+      let loss =
+        Fox_jit.jit
+          (module Model)
+          (module Value)
+          ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
+          !model
+      in
       print_s [%message "test dataset loss" (loss : Value.t)]
     in
     for i = 0 to (Dataset.length train / batch_size) - 1 do
-      if i mod 100 = 0 then print_dataset_loss ();
       let x =
         Tensor.sub_left train.x ~pos:(i * batch_size) ~len:batch_size
         |> Tensor.reshape ~dims:[| -1; 28 * 28 |]
@@ -183,11 +190,15 @@ let command =
         |> Value.of_tensor
       in
       let loss, grad =
-        Eval.handle ~f:(fun () ->
-          grad_and_value
-            (module Model)
-            ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
-            ~x:!model)
+        Fox_jit.jit
+          (module Model)
+          (module Treeable.Tuple2 (Value) (Model))
+          ~f:(fun model ->
+            grad_and_value
+              (module Model)
+              ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
+              ~x:model)
+          !model
       in
       let average_grad_l2_norm =
         Eval.handle ~f:(fun () ->
@@ -197,10 +208,12 @@ let command =
           let sum = List.reduce_exn grad_norms ~f:Value.add in
           Value.scale sum (1. /. Float.of_int (List.length grad_norms)))
       in
+      if i mod 100 = 0 then print_dataset_loss ();
       print_s [%message (loss : Value.t) (average_grad_l2_norm : Value.t)];
       model
       := Eval.handle ~f:(fun () ->
            Model.map2 !model grad ~f:(fun a b ->
              Value.O.(a - Value.scale b learning_rate)))
-    done
+    done;
+    print_dataset_loss ()
 ;;
