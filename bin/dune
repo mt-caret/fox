@@ -1,0 +1,11 @@
+(executable
+ (name fox_examples)
+ (libraries
+  core_unix.bigstring_unix
+  core
+  core_unix.command_unix
+  expect_test_helpers_core
+  fox_core
+  fox_jit)
+ (preprocess
+  (pps ppx_jane ppx_typed_fields)))
