@@ -26,10 +26,10 @@ DYLD_LIBRARY_PATH=/absolute-path-to-ocaml-xla-extension-lib dune build @default 
 
 - [x] Support non-singleton tensors in vjp
 - [x] Better shape and type story
-- [ ] Basic tensor operations for simple neural network example
+- [x] Basic tensor operations for simple neural network example
   - [x] 2d matmuls
   - [x] sum
-  - [ ] TODO: add more here
+  - [x] random other things
 - [x] Print XLA HLO module
 - [ ] Add JIT caching story
 - [ ] Pytorch backend
