@@ -13,19 +13,26 @@ module Var : sig
 end
 
 module Atom : sig
-  type t =
+  type 'a t =
     | Var of Var.t
-    | Value of Value.t
+    | Value of 'a Value.t
   [@@deriving sexp_of]
 
-  val of_value : Value.t -> vars:Var.Set.t -> t
-  val dims : t -> int array
+  include Higher_kinded.S with type 'a t := 'a t
+
+  module Packed : sig
+    type 'a typed := 'a t
+    type t = T : 'a typed -> t
+  end
+
+  val of_value : 'a Value.t -> vars:Var.Set.t -> 'a t
+  val dims : 'a t -> int array
 end
 
 module Eq : sig
   type t =
     { var : Var.t
-    ; op : Atom.t Op.t
+    ; op : Atom.higher_kinded Op.Packed.t
     }
   [@@deriving sexp_of, fields ~getters]
 end
@@ -33,7 +40,7 @@ end
 type t = private
   { parameters : Var.t list
   ; equations : Eq.t list
-  ; return_vals : Atom.t Nonempty_list.t
+  ; return_vals : Atom.Packed.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
   }
 [@@deriving sexp_of, fields ~getters]
@@ -41,7 +48,7 @@ type t = private
 val create
   :  parameters:Var.t list
   -> equations:Eq.t list
-  -> return_vals:Atom.t Nonempty_list.t
+  -> return_vals:Atom.Packed.t Nonempty_list.t
   -> out_tree_def:Value_tree.Def.t
   -> t
 

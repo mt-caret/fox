@@ -32,7 +32,14 @@ module Eval = struct
     try f () with
     | effect Fox_effect.Op op, k ->
       let result =
-        Op.map op ~f:Value.to_tensor_exn |> Op.eval (module Tensor) |> Value.of_tensor
+        Op.map
+          op
+          ~f:
+            { f =
+                (fun value -> Value.project value |> Value.to_tensor_exn |> Tensor.inject)
+            }
+        |> Tensor.eval_op
+        |> Value.of_tensor
       in
       continue k result
   ;;
@@ -46,20 +53,40 @@ end
 let foo x = Value.O.(x * (x + Value.of_float 3.))
 
 let%expect_test "foo" =
-  Eval.handle ~f:(fun () -> foo (Value.of_float 2.)) |> [%sexp_of: Value.t] |> print_s;
+  Eval.handle ~f:(fun () -> foo (Value.of_float 2.))
+  |> [%sexp_of: float Value.t]
+  |> print_s;
   [%expect {| (Tensor 10) |}]
 ;;
 
 module Dual_number = struct
-  type t =
-    { primal : Value.t
-    ; tangent : Value.t
-    ; id : Id.t
-    }
-  [@@deriving sexp_of, fields ~getters]
+  module T = struct
+    type 'a t =
+      { primal : 'a Value.t
+      ; tangent : 'a Value.t option
+      ; id : Id.t
+      }
+    [@@deriving sexp_of, fields ~getters]
+  end
 
-  let type_id = Type_equal.Id.create ~name:"Dual_number" [%sexp_of: t]
-  let to_value t : Value.t = T { value = t; type_id; dims = Value.dims t.primal }
+  include T
+  include Higher_kinded.Make (T)
+
+  include Type_equal.Id.Create1 (struct
+      type nonrec 'a t = 'a t [@@deriving sexp_of]
+
+      let name = "Dual_number"
+    end)
+
+  let to_value (type a) (t : a t) : a Value.t =
+    let type_ = Value.type_ t.primal in
+    T
+      { value = t
+      ; type_id = type_equal_id (Type.type_equal_id type_)
+      ; dims = Value.dims t.primal
+      ; type_
+      }
+  ;;
 end
 
 module Jvp = struct
@@ -67,109 +94,185 @@ module Jvp = struct
 
   let create () = { id = Id.create () }
 
-  let dual_number t ~primal ~tangent : Dual_number.t =
-    [%test_eq: int array] (Value.dims primal) (Value.dims tangent);
-    { primal; tangent; id = t.id }
+  let dual_number (type a) t ~(primal : a Value.t) ~(tangent : a Value.t option)
+    : a Dual_number.t
+    =
+    match Value.type_ primal, tangent with
+    | Float, Some tangent ->
+      [%test_eq: int array] (Value.dims primal) (Value.dims tangent);
+      { primal; tangent = Some tangent; id = t.id }
+    | _, _ ->
+      raise_s
+        [%message
+          "Unsupported combination of primal and tangent"
+            (primal : _ Value.t)
+            (tangent : _ Value.t option)]
   ;;
 
-  let lift t (T { value = x; type_id; dims } as value : Value.t) : Dual_number.t =
-    let zeros () = Value.of_tensor (Tensor.create ~dims 0.) in
-    match Type_equal.Id.same_witness type_id Dual_number.type_id with
+  let lift (type a) t (T { value = x; type_id; dims; type_ } as value : a Value.t)
+    : a Dual_number.t
+    =
+    match
+      Type_equal.Id.same_witness
+        type_id
+        (Dual_number.type_equal_id (Type.type_equal_id type_))
+    with
     | Some T ->
-      if Id.equal t.id x.id then x else dual_number t ~primal:value ~tangent:(zeros ())
-    | None -> dual_number t ~primal:value ~tangent:(zeros ())
+      if Id.equal t.id x.id
+      then x
+      else (
+        let tangent : a Value.t option =
+          match type_ with
+          | Float -> Some (Value.of_tensor (Tensor.create Float ~dims 0.))
+          | Bool -> None
+        in
+        dual_number t ~primal:value ~tangent)
+    | None ->
+      let tangent : a Value.t option =
+        match type_ with
+        | Float -> Some (Value.of_tensor (Tensor.create Float ~dims 0.))
+        | Bool -> None
+      in
+      dual_number t ~primal:value ~tangent
   ;;
 
   let handle t ~f =
     try f () with
     | effect Fox_effect.Op op, k ->
       let result =
-        match Op.map op ~f:(lift t) with
+        match
+          Op.map
+            op
+            ~f:{ f = (fun value -> Value.project value |> lift t |> Dual_number.inject) }
+        with
         | Unary (Neg, a) ->
-          dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
+          let a = Dual_number.project a in
+          dual_number
+            t
+            ~primal:Value.O.(-a.primal)
+            ~tangent:(Option.map a.tangent ~f:(fun tangent -> Value.O.(-tangent)))
         | Unary (Sin, a) ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.sin a.primal)
-            ~tangent:Value.O.(Value.cos a.primal * a.tangent)
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(Value.cos a.primal * tangent)))
         | Unary (Cos, a) ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.cos a.primal)
-            ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(-Value.sin a.primal * tangent)))
         | Unary (Sqrt, a) ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.sqrt a.primal)
-            ~tangent:(Value.div a.tangent (Value.scale (Value.sqrt a.primal) 2.))
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.div tangent (Value.scale (Value.sqrt a.primal) 2.)))
         | Unary (Exp, a) ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.exp a.primal)
-            ~tangent:Value.O.(Value.exp a.primal * a.tangent)
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(Value.exp a.primal * tangent)))
         | Unary (Log, a) ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.log a.primal)
-            ~tangent:(Value.div a.tangent a.primal)
+            ~tangent:(Option.map a.tangent ~f:(fun tangent -> Value.div tangent a.primal))
         | Unary (Sigmoid, a) ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.sigmoid a.primal)
             ~tangent:
-              Value.O.(
-                Value.sigmoid a.primal
-                * ((Value.of_float 1. |> Value.broadcast ~dims:(Value.dims a.primal))
-                   - Value.sigmoid a.primal)
-                * a.tangent)
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(
+                   Value.sigmoid a.primal
+                   * ((Value.of_float 1. |> Value.broadcast ~dims:(Value.dims a.primal))
+                      - Value.sigmoid a.primal)
+                   * tangent)))
         | Binary (Add, a, b) ->
+          let a = Dual_number.project a in
+          let b = Dual_number.project b in
           dual_number
             t
             ~primal:Value.O.(a.primal + b.primal)
-            ~tangent:Value.O.(a.tangent + b.tangent)
+            ~tangent:
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(a_tangent + b_tangent)))
         | Binary (Sub, a, b) ->
+          let a = Dual_number.project a in
+          let b = Dual_number.project b in
           dual_number
             t
             ~primal:Value.O.(a.primal - b.primal)
-            ~tangent:Value.O.(a.tangent - b.tangent)
+            ~tangent:
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(a_tangent - b_tangent)))
         | Binary (Mul, a, b) ->
+          let a = Dual_number.project a in
+          let b = Dual_number.project b in
           dual_number
             t
             ~primal:Value.O.(a.primal * b.primal)
-            ~tangent:Value.O.((a.tangent * b.primal) + (a.primal * b.tangent))
+            ~tangent:
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.((a_tangent * b.primal) + (a.primal * b_tangent))))
         | Binary (Div, a, b) ->
+          let a = Dual_number.project a in
+          let b = Dual_number.project b in
           dual_number
             t
             ~primal:Value.O.(a.primal / b.primal)
             ~tangent:
-              Value.O.(
-                ((a.tangent * b.primal) - (a.primal * b.tangent)) / (b.primal * b.primal))
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(
+                   ((a_tangent * b.primal) - (a.primal * b_tangent))
+                   / (b.primal * b.primal))))
         | Matmul (a, b) ->
+          let a = Dual_number.project a in
+          let b = Dual_number.project b in
           dual_number
             t
             ~primal:(Value.matmul a.primal b.primal)
             ~tangent:
-              Value.O.(Value.matmul a.tangent b.primal + Value.matmul a.primal b.tangent)
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(
+                   Value.matmul a_tangent b.primal + Value.matmul a.primal b_tangent)))
         | Transpose a ->
+          let a = Dual_number.project a in
           dual_number
             t
             ~primal:(Value.transpose a.primal)
-            ~tangent:(Value.transpose a.tangent)
+            ~tangent:(Option.map a.tangent ~f:Value.transpose)
         | Sum { value; dims; keep_dims } ->
+          let value = Dual_number.project value in
           dual_number
             t
             ~primal:(Value.sum ~dims ~keep_dims value.primal)
-            ~tangent:(Value.sum ~dims ~keep_dims value.tangent)
+            ~tangent:(Option.map value.tangent ~f:(Value.sum ~dims ~keep_dims))
         | Broadcast { value; dims } ->
+          let value = Dual_number.project value in
           dual_number
             t
             ~primal:(Value.broadcast ~dims value.primal)
-            ~tangent:(Value.broadcast ~dims value.tangent)
+            ~tangent:(Option.map value.tangent ~f:(Value.broadcast ~dims))
         | Reshape { value; dims } ->
+          let value = Dual_number.project value in
           dual_number
             t
             ~primal:(Value.reshape value.primal ~dims)
-            ~tangent:(Value.reshape value.tangent ~dims)
+            ~tangent:(Option.map value.tangent ~f:(Value.reshape ~dims))
       in
       continue k (Dual_number.to_value result)
   ;;

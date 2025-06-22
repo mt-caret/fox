@@ -18,7 +18,7 @@ module General = struct
   ;;
 end
 
-type t = Value0.t General.t [@@deriving sexp_of]
+type t = Value0.Packed.t General.t [@@deriving sexp_of]
 
 let node = General.node
 
@@ -30,7 +30,7 @@ let get_exn (t : t) name =
 
 let of_value value = General.leaf value
 
-let to_value_exn : t -> Value0.t = function
+let to_value_exn : t -> Value0.Packed.t = function
   | Leaf value -> value
   | Node _ as t -> raise_s [%message "Unexpected non-leaf node" (t : t)]
 ;;
@@ -47,7 +47,7 @@ module Def = struct
 
   let leaf ~dims = General.leaf dims
   let node = General.node
-  let create tree = General.map tree ~f:Value0.dims
+  let create tree = General.map tree ~f:(fun (Value0.Packed.T t) -> Value0.dims t)
   let length = General.length
   let flatten = flatten
 end
@@ -59,7 +59,7 @@ let rec unflatten' values ~(def : Def.t) ~sexp_of_value : _ General.t =
   | Leaf dims ->
     (match values with
      | [ value ] ->
-       [%test_result: int array] (Value0.dims value) ~expect:dims;
+       [%test_result: int array] (Value0.Packed.dims value) ~expect:dims;
        Leaf value
      | _ -> raise_s [%message "Expected singleton leaf value" (values : value list)])
   | Node children ->
@@ -79,4 +79,6 @@ let rec unflatten' values ~(def : Def.t) ~sexp_of_value : _ General.t =
 ;;
 
 (* TODO: test flatten and unflatten roundtrip *)
-let unflatten values ~def = unflatten' values ~def ~sexp_of_value:[%sexp_of: Value0.t]
+let unflatten values ~def =
+  unflatten' values ~def ~sexp_of_value:[%sexp_of: Value0.Packed.t]
+;;

@@ -1,48 +1,58 @@
 open! Core
 
 module type S = sig
-  type t
+  type 'a t
 
-  val neg : t -> t
-  val sin : t -> t
-  val cos : t -> t
-  val sqrt : t -> t
-  val exp : t -> t
-  val log : t -> t
-  val sigmoid : t -> t
-  val add : t -> t -> t
-  val sub : t -> t -> t
-  val mul : t -> t -> t
-  val div : t -> t -> t
-  val matmul : t -> t -> t
-  val transpose : t -> t
-  val reshape : t -> dims:int array -> t
-  val sum : ?dims:[ `Just of int Nonempty_list.t | `All ] -> ?keep_dims:bool -> t -> t
-  val mean : ?dims:[ `Just of int Nonempty_list.t | `All ] -> ?keep_dims:bool -> t -> t
+  val neg : float t -> float t
+  val sin : float t -> float t
+  val cos : float t -> float t
+  val sqrt : float t -> float t
+  val exp : float t -> float t
+  val log : float t -> float t
+  val sigmoid : float t -> float t
+  val add : float t -> float t -> float t
+  val sub : float t -> float t -> float t
+  val mul : float t -> float t -> float t
+  val div : float t -> float t -> float t
+  val matmul : float t -> float t -> float t
+  val transpose : 'a t -> 'a t
+  val reshape : 'a t -> dims:int array -> 'a t
+
+  val sum
+    :  ?dims:[ `Just of int Nonempty_list.t | `All ]
+    -> ?keep_dims:bool
+    -> float t
+    -> float t
+
+  val mean
+    :  ?dims:[ `Just of int Nonempty_list.t | `All ]
+    -> ?keep_dims:bool
+    -> float t
+    -> float t
 
   val var
     :  ?dims:[ `Just of int Nonempty_list.t | `All ]
     -> ?keep_dims:bool
     -> ?correction:bool
-    -> t
-    -> t
+    -> float t
+    -> float t
 
   val std
     :  ?dims:[ `Just of int Nonempty_list.t | `All ]
     -> ?keep_dims:bool
     -> ?correction:bool
-    -> t
-    -> t
+    -> float t
+    -> float t
 
-  val softmax : dim:int -> t -> t
-  val broadcast : t -> dims:int array -> t
-  val scale : t -> float -> t
+  val softmax : dim:int -> float t -> float t
+  val broadcast : 'a t -> dims:int array -> 'a t
+  val scale : float t -> float -> float t
 
   module O : sig
-    val ( ~- ) : t -> t
-    val ( + ) : t -> t -> t
-    val ( - ) : t -> t -> t
-    val ( * ) : t -> t -> t
-    val ( / ) : t -> t -> t
+    val ( ~- ) : float t -> float t
+    val ( + ) : float t -> float t -> float t
+    val ( - ) : float t -> float t -> float t
+    val ( * ) : float t -> float t -> float t
+    val ( / ) : float t -> float t -> float t
   end
 end
