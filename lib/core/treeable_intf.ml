@@ -7,6 +7,20 @@ module type S = sig
   val t_of_tree : Value_tree.t -> t
 end
 
+module type S1 = sig
+  type 'a t
+
+  val tree_of_t : 'a t -> Value_tree.t
+  val t_of_tree : Value_tree.t -> 'a t
+end
+
+module type S2 = sig
+  type ('a, 'b) t
+
+  val tree_of_t : ('a, 'b) t -> Value_tree.t
+  val t_of_tree : Value_tree.t -> ('a, 'b) t
+end
+
 module type Conv_arg = sig
   type t
   type treeable
@@ -27,6 +41,8 @@ end
 
 module type Treeable = sig
   module type S = S
+  module type S1 = S1
+  module type S2 = S2
 
   module Conv (Treeable : S) (Conv : Conv_arg with type treeable := Treeable.t) :
     S with type t := Conv.t

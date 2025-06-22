@@ -23,17 +23,34 @@ module Var = struct
 end
 
 module Atom = struct
-  type t =
-    | Var of Var.t
-    | Value of Value.t
-  [@@deriving sexp_of]
+  module T = struct
+    type 'a t =
+      | Var of Var.t
+      | Value of 'a Value.t
+    [@@deriving sexp_of]
+  end
 
-  let to_string = function
+  include T
+  include Higher_kinded.Make (T)
+
+  module Packed = struct
+    type 'a typed = 'a t [@@deriving sexp_of]
+    type t = T : 'a typed -> t
+
+    let sexp_of_t (T t) = [%sexp_of: _ typed] t
+  end
+
+  let to_string (type a) (t : a t) =
+    match t with
     | Var { name; dims = _ } -> name
-    | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
+    | Value value -> Sexp.to_string ([%sexp_of: Value.Packed.t] (T value))
   ;;
 
-  let of_value (T { value = x; type_id; dims } as value : Value.t) ~(vars : Var.Set.t) : t
+  let of_value
+        (type a)
+        (T { value = x; type_id; dims; type_ = _ } as value : a Value.t)
+        ~(vars : Var.Set.t)
+    : a t
     =
     match Type_equal.Id.same_witness type_id Var.type_id with
     | Some T ->
@@ -53,20 +70,30 @@ end
 module Eq = struct
   type t =
     { var : Var.t
-    ; op : Atom.t Op.t
+    ; op : Atom.higher_kinded Op.Packed.t
     }
-  [@@deriving sexp_of, fields ~getters]
+  [@@deriving fields ~getters]
 
-  let to_string { var; op } =
-    let op_string = Op.to_string op ~f:Atom.to_string in
+  let to_string { var; op = T op } =
+    let op_string = Op.to_string op ~f:(fun t -> Atom.to_string (Atom.project t)) in
     [%string "%{var#Var} = %{op_string};"]
+  ;;
+
+  let sexp_of_t { var; op } =
+    [%sexp
+      { var : Var.t
+      ; op : Sexp.t =
+          Op.Packed.sexp_of_t
+            ~f:{ f = (fun t -> [%sexp_of: _ Atom.t] (Atom.project t)) }
+            op
+      }]
   ;;
 end
 
 type t =
   { parameters : Var.t list
   ; equations : Eq.t list
-  ; return_vals : Atom.t Nonempty_list.t
+  ; return_vals : Atom.Packed.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
   }
 [@@deriving sexp_of, fields ~getters]
@@ -76,7 +103,7 @@ let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
   let equations = String.concat ~sep:"\n" (List.map equations ~f:Eq.to_string) in
   let return_vals =
     Nonempty_list.to_list return_vals
-    |> List.map ~f:Atom.to_string
+    |> List.map ~f:(fun (T t) -> Atom.to_string t)
     |> String.concat ~sep:", "
   in
   [%string "%{parameters#String} ->\n%{equations#String}\n( %{return_vals} )"]
@@ -84,11 +111,11 @@ let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
 
 let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
   let env = Var.Set.of_list parameters in
-  let validate_atoms ~env (atoms : Atom.t list) =
+  let validate_atoms ~env (atoms : Atom.Packed.t list) =
     match
       List.filter_map atoms ~f:(function
-        | Var var -> Some var
-        | Value _ -> None)
+        | T (Var var) -> Some var
+        | T (Value _) -> None)
       |> List.filter ~f:(Fn.non (Set.mem env))
     with
     | [] -> ()
@@ -98,8 +125,12 @@ let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
           "Undefined variable" (missing_vars : Var.t list) ~expr:(to_string_hum t)]
   in
   let env =
-    List.fold equations ~init:env ~f:(fun env { var; op } ->
-      Op.to_list op |> validate_atoms ~env;
+    List.fold equations ~init:env ~f:(fun env { var; op = T op } ->
+      Op.Non_higher_kinded.of_higher_kinded
+        op
+        ~f:{ f = (fun atom -> Atom.Packed.T (Atom.project atom)) }
+      |> Op.Non_higher_kinded.to_list
+      |> validate_atoms ~env;
       Set.add env var)
   in
   Nonempty_list.to_list return_vals |> validate_atoms ~env
