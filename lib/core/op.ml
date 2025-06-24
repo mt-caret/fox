@@ -248,12 +248,13 @@ let infer_dims t =
 let infer_dims_exn t = infer_dims t |> ok_exn
 
 module Make_operators (M : sig
-    type value [@@deriving sexp_of]
+    type 'a op := 'a t
+    type t [@@deriving sexp_of]
 
-    val of_float : float -> value
-    val eval : value t -> value
-    val dims : value -> int array
-  end) : Operators_intf.S with type t := M.value = struct
+    val of_float : float -> t
+    val eval : t op -> t
+    val dims : t -> int array
+  end) : Operators_intf.S with type t := M.t = struct
   let eval =
     fun t ->
     let inferred_out_dims = map t ~f:M.dims |> infer_dims_exn in

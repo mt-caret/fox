@@ -22,6 +22,7 @@ module Dataset = struct
         bigstring)
     in
     Tensor.init
+      Float
       ~dims:[| Bigstring.length contents |]
       ~f:(fun index -> Bigstring.get contents index.(0) |> Char.to_int |> Int.to_float)
   ;;
@@ -33,7 +34,7 @@ module Dataset = struct
   ;;
 
   let print { x; y } ~i =
-    let n = Tensor.get y [| i |] |> Int.of_float in
+    let n = Tensor.get_exn Float y [| i |] |> Int.of_float in
     print_endline [%string "Label: %{n#Int}"];
     let x = Tensor.left_slice x ~indices:[| i |] in
     let image =
@@ -41,7 +42,7 @@ module Dataset = struct
       |> List.map ~f:(fun row ->
         List.range 0 28
         |> List.map ~f:(fun col ->
-          let pixel = Tensor.get x [| row; col |] in
+          let pixel = Tensor.get_exn Float x [| row; col |] in
           let pixel = 255 - Int.of_float (pixel /. 255. *. 23.) in
           [%string "\027[48;5;%{pixel#Int}m "])
         |> String.concat)
@@ -154,17 +155,19 @@ let command =
     let print_dataset_loss () =
       let x =
         Tensor.reshape train.x ~dims:[| -1; 28 * 28 |]
-        |> Tensor.map ~f:(fun x -> x /. 255.)
-        |> Value.of_tensor
+        |> Tensor.to_typed_exn Float
+        |> Tensor.Typed.map Float ~f:(fun x -> x /. 255.)
+        |> Value.of_typed_tensor
       in
       let y =
         let labels = train.y in
-        Tensor.init
+        Tensor.Typed.init
+          Float
           ~dims:[| Tensor.length labels; 10 |]
           ~f:(fun index ->
-            let label = Tensor.get labels [| index.(0) |] |> Float.to_int in
+            let label = Tensor.get_exn Float labels [| index.(0) |] |> Float.to_int in
             if label = index.(1) then 1. else 0.)
-        |> Value.of_tensor
+        |> Value.of_typed_tensor
       in
       let loss =
         Fox_jit.jit
@@ -179,15 +182,16 @@ let command =
       let x =
         Tensor.sub_left train.x ~pos:(i * batch_size) ~len:batch_size
         |> Tensor.reshape ~dims:[| -1; 28 * 28 |]
-        |> Tensor.map ~f:(fun x -> x /. 255.)
-        |> Value.of_tensor
+        |> Tensor.to_typed_exn Float
+        |> Tensor.Typed.map Float ~f:(fun x -> x /. 255.)
+        |> Value.of_typed_tensor
       in
       let y =
         let labels = Tensor.sub_left train.y ~pos:(i * batch_size) ~len:batch_size in
-        Tensor.init ~dims:[| batch_size; 10 |] ~f:(fun index ->
-          let label = Tensor.get labels [| index.(0) |] |> Float.to_int in
+        Tensor.Typed.init Float ~dims:[| batch_size; 10 |] ~f:(fun index ->
+          let label = Tensor.get_exn Float labels [| index.(0) |] |> Float.to_int in
           if label = index.(1) then 1. else 0.)
-        |> Value.of_tensor
+        |> Value.of_typed_tensor
       in
       let loss, grad =
         Fox_jit.jit

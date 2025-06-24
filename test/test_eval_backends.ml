@@ -36,7 +36,7 @@ module Tensor = struct
       List.init total_elements ~f:(fun _ -> Generator.float_inclusive (-100.) 100.)
       |> Generator.all
     in
-    Tensor.of_list values |> Tensor.reshape ~dims
+    Tensor.of_list Float values |> Tensor.reshape ~dims
   ;;
 
   let quickcheck_generator =
@@ -45,42 +45,59 @@ module Tensor = struct
     quickcheck_generator_with_dims ~dims
   ;;
 
-  let tensor_equal tensor1 tensor2 =
-    [%test_eq: int array] (Tensor.dims tensor1) (Tensor.dims tensor2);
-    let is_equal = ref true in
-    Tensor.iteri tensor1 ~f:(fun index value1 ->
-      let value2 = Tensor.get tensor2 index in
-      is_equal
-      := !is_equal
-         && (Float.robustly_compare value1 value2 = 0
-             || (Float.is_nan value1 && Float.is_nan value2)));
-    !is_equal
+  (* TODO: move this to Tensor.allclose *)
+  let tensor_equal (T tensor1 : Tensor.t) (T tensor2 : Tensor.t) =
+    [%test_eq: int array] (Tensor.Typed.dims tensor1) (Tensor.Typed.dims tensor2);
+    match Tensor.Typed.type_ tensor1, Tensor.Typed.type_ tensor2 with
+    | Float, Float ->
+      let is_equal = ref true in
+      Tensor.Typed.iteri tensor1 ~f:(fun index value1 ->
+        let value2 = Tensor.Typed.get tensor2 index in
+        is_equal
+        := !is_equal
+           && (Float.robustly_compare value1 value2 = 0
+               || (Float.is_nan value1 && Float.is_nan value2)));
+      !is_equal
+    | Bool, Bool ->
+      let is_equal = ref true in
+      Tensor.Typed.iteri tensor1 ~f:(fun index value1 ->
+        let value2 = Tensor.Typed.get tensor2 index in
+        is_equal := !is_equal && Bool.equal value1 value2);
+      !is_equal
+    | Float, _ | _, Float -> false
   ;;
 
   let quickcheck_shrinker =
-    Shrinker.create (fun tensor ->
-      let dims = Tensor.dims tensor in
+    Shrinker.create (fun (Tensor.T tensor) ->
+      let dims = Tensor.Typed.dims tensor in
       let sliced_tensors =
         if Array.length dims > 0
         then
           Sequence.init dims.(0) ~f:(fun i ->
-            Bigarray.Genarray.slice_left (Tensor.Private.to_bigarray tensor) [| i |]
-            |> Tensor.Private.of_bigarray)
+            T (Tensor.Typed.left_slice tensor ~indices:[| i |]))
         else Sequence.empty
       in
       let smaller_tensors =
-        Sequence.unfold ~init:tensor ~f:(fun tensor ->
-          let tensor' = Tensor.map tensor ~f:(fun x -> x /. 2.) in
-          if tensor_equal tensor tensor' then None else Some (tensor', tensor'))
+        match Tensor.Typed.type_ tensor with
+        | Float ->
+          Sequence.unfold ~init:tensor ~f:(fun tensor ->
+            let tensor' = Tensor.Typed.map Float tensor ~f:(fun x -> x /. 2.) in
+            if tensor_equal (T tensor) (T tensor') then None else Some (T tensor', tensor'))
+        | Bool ->
+          (* TODO: consider shrinking bool tensors *)
+          Sequence.empty
       in
       Sequence.interleave (Sequence.of_list [ sliced_tensors; smaller_tensors ]))
   ;;
 
   let quickcheck_observer =
-    Observer.of_hash_fold (fun hash_state tensor ->
+    Observer.of_hash_fold (fun hash_state (T tensor) ->
       let hash_state = ref hash_state in
-      Tensor.iter tensor ~f:(fun value ->
-        hash_state := Float.hash_fold_t !hash_state value);
+      Tensor.Typed.iter tensor ~f:(fun value ->
+        hash_state
+        := match Tensor.Typed.type_ tensor with
+           | Float -> Float.hash_fold_t !hash_state value
+           | Bool -> Bool.hash_fold_t !hash_state value);
       !hash_state)
   ;;
 end
@@ -353,7 +370,7 @@ let%expect_test "grad+jit vs grad+eval" =
   test
     ~f:(fun value ->
       grad' ~f:(fun value -> Value.O.(value / value) |> Value.sum) ~x:value)
-    ~x:(Value.of_tensor (Tensor.of_list [ 1.; 1. ]));
+    ~x:(Value.of_tensor (Tensor.of_list Float [ 1.; 1. ]));
   [%expect
     {|
     (Tensor (0 0) (dims (2)))
@@ -361,7 +378,7 @@ let%expect_test "grad+jit vs grad+eval" =
     |}];
   test
     ~f:(fun value -> grad' ~f:(fun value -> Value.sqrt value |> Value.sum) ~x:value)
-    ~x:(Value.of_tensor (Tensor.of_list [ 1.; 1. ]));
+    ~x:(Value.of_tensor (Tensor.of_list Float [ 1.; 1. ]));
   [%expect
     {|
     (Tensor (0.5 0.5) (dims (2)))

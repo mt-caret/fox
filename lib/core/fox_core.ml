@@ -32,7 +32,9 @@ module Eval = struct
     try f () with
     | effect Fox_effect.Op op, k ->
       let result =
-        Op.map op ~f:Value.to_tensor_exn |> Op.eval (module Tensor) |> Value.of_tensor
+        Op.map op ~f:Value.to_tensor_exn
+        |> Op.eval (module Tensor : Operators_intf.S with type t = Tensor.t)
+        |> Value.of_tensor
       in
       continue k result
   ;;
@@ -73,7 +75,7 @@ module Jvp = struct
   ;;
 
   let lift t (T { value = x; type_id; dims } as value : Value.t) : Dual_number.t =
-    let zeros () = Value.of_tensor (Tensor.create ~dims 0.) in
+    let zeros () = Value.of_typed_tensor (Tensor.Typed.create Float ~dims 0.) in
     match Type_equal.Id.same_witness type_id Dual_number.type_id with
     | Some T ->
       if Id.equal t.id x.id then x else dual_number t ~primal:value ~tangent:(zeros ())
@@ -793,7 +795,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
     (* TODO: some sort of type inference / add a new variant for "zero"? *)
     Map.find ct_env var
     |> Option.value_or_thunk ~default:(fun () ->
-      Tensor.zeros ~dims:(Expr.Var.dims var) |> Value.of_tensor)
+      Tensor.Typed.zeros ~dims:(Expr.Var.dims var) |> Value.of_typed_tensor)
   in
   let ct_env =
     List.zip_exn (Nonempty_list.to_list expr.return_vals) cotangents
@@ -1010,7 +1012,7 @@ let%expect_test "grad" =
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(Value.sum ~keep_dims:false)
-      ~x:(Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ])))
+      ~x:(Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ])))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect {| (Tensor ((1 1) (1 1)) (dims (2 2))) |}];
@@ -1018,7 +1020,7 @@ let%expect_test "grad" =
     grad'
       ~f:(fun x ->
         Value.broadcast x ~dims:[| 3; 4 |] |> Value.sum ~dims:(`Just [ 1 ]) |> Value.mean)
-      ~x:(Value.of_tensor (Tensor.arange 4)))
+      ~x:(Value.of_typed_tensor (Tensor.Typed.arange 4)))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect {| (Tensor (1 1 1 1) (dims (4))) |}]

@@ -2,35 +2,55 @@
 
 open! Core
 
-type t [@@deriving sexp_of, compare]
+module Typed : sig
+  type 'a t [@@deriving sexp_of, compare]
 
-val type_id : t Type_equal.Id.t
+  val type_ : 'a t -> 'a Type.t
+  val type_equal_id : 'a Type_equal.Id.t -> 'a t Type_equal.Id.t
+  val dims : 'a t -> int array
+  val num_dims : 'a t -> int
+  val length : 'a t -> int
+  val item : 'a t -> 'a
+  val get : 'a t -> int array -> 'a
+  val set : 'a t -> int array -> 'a -> unit
+  val fill : 'a t -> 'a -> unit
+  val left_slice : 'a t -> indices:int array -> 'a t
+  val sub_left : 'a t -> pos:int -> len:int -> 'a t
+  val of_lit : 'a Type.t -> 'a -> 'a t
+  val of_list : 'a Type.t -> 'a list -> 'a t
+
+  (** [of_list2_exn l] creates a tensor from a list of rows. Raises if a
+    non-rectangular list of lists are provided. *)
+  val of_list2_exn : 'a Type.t -> 'a list list -> 'a t
+
+  val create : 'a Type.t -> dims:int array -> 'a -> 'a t
+  val init : 'a Type.t -> dims:int array -> f:(int array -> 'a) -> 'a t
+  val zeros : dims:int array -> float t
+  val ones : dims:int array -> float t
+  val arange : int -> float t
+  val map : 'b Type.t -> 'a t -> f:('a -> 'b) -> 'b t
+  val mapi : 'b Type.t -> 'a t -> f:(int array -> 'a -> 'b) -> 'b t
+  val map2 : 'c Type.t -> 'a t -> 'b t -> f:('a -> 'b -> 'c) -> 'c t
+  val iter : 'a t -> f:('a -> unit) -> unit
+  val iteri : 'a t -> f:(int array -> 'a -> unit) -> unit
+end
+
+type t = T : 'a Typed.t -> t [@@deriving sexp_of]
+
+val of_typed : 'a Typed.t -> t
+val to_typed_exn : 'a Type.t -> t -> 'a Typed.t
 val dims : t -> int array
 val num_dims : t -> int
 val length : t -> int
-val item : t -> float
-val get : t -> int array -> float
-val set : t -> int array -> float -> unit
-val fill : t -> float -> unit
+val item_exn : 'a Type.t -> t -> 'a
+val get_exn : 'a Type.t -> t -> int array -> 'a
 val left_slice : t -> indices:int array -> t
 val sub_left : t -> pos:int -> len:int -> t
-val of_float : float -> t
-val of_list : float list -> t
-
-(** [of_list2_exn l] creates a tensor from a list of rows. Raises if a
-    non-rectangular list of lists are provided. *)
-val of_list2_exn : float list list -> t
-
-val create : dims:int array -> float -> t
-val init : dims:int array -> f:(int array -> float) -> t
+val init : 'a Type.t -> dims:int array -> f:(int array -> 'a) -> t
+val of_list : 'a Type.t -> 'a list -> t
+val of_list2_exn : 'a Type.t -> 'a list list -> t
+val of_lit : 'a Type.t -> 'a -> t
 val zeros : dims:int array -> t
-val ones : dims:int array -> t
-val arange : int -> t
-val map : t -> f:(float -> float) -> t
-val mapi : t -> f:(int array -> float -> float) -> t
-val map2 : t -> t -> f:(float -> float -> float) -> t
-val iter : t -> f:(float -> unit) -> unit
-val iteri : t -> f:(int array -> float -> unit) -> unit
 
 include Operators_intf.S with type t := t
 
@@ -52,10 +72,10 @@ end
 
 module Private : sig
   val to_bigarray
-    :  t
+    :  float Typed.t
     -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
 
   val of_bigarray
     :  (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
-    -> t
+    -> float Typed.t
 end

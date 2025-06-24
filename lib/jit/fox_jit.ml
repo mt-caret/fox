@@ -19,9 +19,9 @@ let xla_subcomp
     match atom with
     | Var var -> Map.find_exn env var
     | Value value ->
-      let tensor = Value.to_tensor_exn value in
+      let tensor = Value.to_typed_tensor_exn Float value in
       let op = tensor_to_xla_literal tensor |> Xla.Op.constant ~builder in
-      op, Tensor.dims tensor
+      op, Tensor.Typed.dims tensor
   in
   let env =
     List.fold equations ~init:env ~f:(fun env { var; op } ->
@@ -40,7 +40,7 @@ let xla_subcomp
             | Sigmoid ->
               fun x ->
                 let one =
-                  Tensor.ones ~dims:(Xla.Op.dims x)
+                  Tensor.Typed.ones ~dims:(Xla.Op.dims x)
                   |> tensor_to_xla_literal
                   |> Xla.Op.constant ~builder
                 in
@@ -140,14 +140,14 @@ let jit
   let input_tree = In.tree_of_t input in
   let input_tree_def = Value_tree.to_def input_tree in
   let flattened_input_tensors =
-    Value_tree.flatten input_tree |> List.map ~f:Value.to_tensor_exn
+    Value_tree.flatten input_tree |> List.map ~f:(Value.to_typed_tensor_exn Float)
   in
   let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
   let xla_callable = xla_callable ?print_hlo expr |> Staged.unstage in
   let output =
     xla_callable flattened_input_tensors
     |> Nonempty_list.to_list
-    |> List.map ~f:Value.of_tensor
+    |> List.map ~f:Value.of_typed_tensor
   in
   Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree
 ;;
@@ -197,8 +197,8 @@ let%expect_test "jit'" =
 ;;
 
 let%expect_test "jit and matmul" =
-  let a = Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ] |> Value.of_tensor in
-  let b = Tensor.of_list2_exn [ [ 5.; 6. ]; [ 7.; 8. ] ] |> Value.of_tensor in
+  let a = Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ] |> Value.of_tensor in
+  let b = Tensor.of_list2_exn Float [ [ 5.; 6. ]; [ 7.; 8. ] ] |> Value.of_tensor in
   jit
     ~print_hlo:true
     (module Treeable.Tuple2 (Value) (Value))
@@ -225,7 +225,7 @@ let%expect_test "jit and sum" =
   jit'
     ~print_hlo:true
     ~f:(fun x -> Value.sum x)
-    (Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
+    (Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect
@@ -252,7 +252,7 @@ let%expect_test "jit and broadcast" =
   jit'
     ~print_hlo:true
     ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |])
-    (Value.of_tensor (Tensor.of_list2_exn [ [ 1.; 2. ]; [ 3.; 4. ] ]))
+    (Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect

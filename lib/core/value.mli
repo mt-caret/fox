@@ -11,7 +11,9 @@ type t = Value0.t =
 
 val dims : t -> int array
 val tree_def : dims:int array -> Value_tree.Def.t
+val of_typed_tensor : 'a Tensor.Typed.t -> t
 val of_tensor : Tensor.t -> t
+val to_typed_tensor_exn : 'a Type.t -> t -> 'a Tensor.Typed.t
 val to_tensor_exn : t -> Tensor.t
 val of_float : float -> t
 val to_float_exn : t -> float
