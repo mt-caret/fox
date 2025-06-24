@@ -33,6 +33,7 @@ module Typed : sig
   val map2 : 'c Type.t -> 'a t -> 'b t -> f:('a -> 'b -> 'c) -> 'c t
   val iter : 'a t -> f:('a -> unit) -> unit
   val iteri : 'a t -> f:(int array -> 'a -> unit) -> unit
+  val allclose : ?equal_nan:bool -> 'a t -> 'a t -> bool
 end
 
 type t = T : 'a Typed.t -> t [@@deriving sexp_of]
@@ -51,6 +52,7 @@ val of_list : 'a Type.t -> 'a list -> t
 val of_list2_exn : 'a Type.t -> 'a list list -> t
 val of_lit : 'a Type.t -> 'a -> t
 val zeros : dims:int array -> t
+val allclose : ?equal_nan:bool -> t -> t -> bool
 
 include Operators_intf.S with type t := t
 

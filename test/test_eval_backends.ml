@@ -45,28 +45,6 @@ module Tensor = struct
     quickcheck_generator_with_dims ~dims
   ;;
 
-  (* TODO: move this to Tensor.allclose *)
-  let tensor_equal (T tensor1 : Tensor.t) (T tensor2 : Tensor.t) =
-    [%test_eq: int array] (Tensor.Typed.dims tensor1) (Tensor.Typed.dims tensor2);
-    match Tensor.Typed.type_ tensor1, Tensor.Typed.type_ tensor2 with
-    | Float, Float ->
-      let is_equal = ref true in
-      Tensor.Typed.iteri tensor1 ~f:(fun index value1 ->
-        let value2 = Tensor.Typed.get tensor2 index in
-        is_equal
-        := !is_equal
-           && (Float.robustly_compare value1 value2 = 0
-               || (Float.is_nan value1 && Float.is_nan value2)));
-      !is_equal
-    | Bool, Bool ->
-      let is_equal = ref true in
-      Tensor.Typed.iteri tensor1 ~f:(fun index value1 ->
-        let value2 = Tensor.Typed.get tensor2 index in
-        is_equal := !is_equal && Bool.equal value1 value2);
-      !is_equal
-    | Float, _ | _, Float -> false
-  ;;
-
   let quickcheck_shrinker =
     Shrinker.create (fun (Tensor.T tensor) ->
       let dims = Tensor.Typed.dims tensor in
@@ -82,7 +60,9 @@ module Tensor = struct
         | Float ->
           Sequence.unfold ~init:tensor ~f:(fun tensor ->
             let tensor' = Tensor.Typed.map Float tensor ~f:(fun x -> x /. 2.) in
-            if tensor_equal (T tensor) (T tensor') then None else Some (T tensor', tensor'))
+            if Tensor.Typed.allclose ~equal_nan:true tensor tensor'
+            then None
+            else Some (T tensor', tensor'))
         | Bool ->
           (* TODO: consider shrinking bool tensors *)
           Sequence.empty
@@ -349,7 +329,8 @@ let%expect_test "eval expr vs xla" =
       let eval_result = Eval.handle ~f:(fun () -> f value) in
       let xla_result = Fox_jit.jit' ~f value in
       assert (
-        Tensor.tensor_equal
+        Tensor.allclose
+          ~equal_nan:true
           (Value.to_tensor_exn eval_result)
           (Value.to_tensor_exn xla_result)))
 ;;
@@ -402,7 +383,8 @@ let%expect_test "eval grad expr vs xla" =
       let eval_result = Eval.handle ~f:(fun () -> f value) in
       let xla_result = Fox_jit.jit' ~f value in
       assert (
-        Tensor.tensor_equal
+        Tensor.allclose
+          ~equal_nan:true
           (Value.to_tensor_exn eval_result)
           (Value.to_tensor_exn xla_result)))
 ;;

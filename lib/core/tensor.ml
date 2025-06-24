@@ -273,6 +273,23 @@ module Typed = struct
 
   let iter t ~f = iteri t ~f:(fun _index value -> f value)
 
+  let allclose (type a) ?(equal_nan = false) (t1 : a t) (t2 : a t) =
+    [%equal: int array] (dims t1) (dims t2)
+    &&
+    let is_equal = ref true in
+    iteri t1 ~f:(fun index value1 ->
+      let value2 = get t2 index in
+      is_equal
+      := !is_equal
+         &&
+         match type_ t1 with
+         | Float ->
+           Float.robustly_compare value1 value2 = 0
+           || (equal_nan && Float.is_nan value1 && Float.is_nan value2)
+         | Bool -> Bool.equal value1 value2);
+    !is_equal
+  ;;
+
   let sum_single_axis t ~axis ~keep_dim =
     let dims = dims t in
     let dims_length = Array.length dims in
@@ -362,6 +379,13 @@ let of_list2_exn (type a) (type_ : a Type.t) (l : a list list) =
 
 let of_lit type_ lit = T (Typed.of_lit type_ lit)
 let zeros ~dims = T (Typed.zeros ~dims)
+
+let allclose ?equal_nan (T t1) (T t2) =
+  match Typed.type_ t1, Typed.type_ t2 with
+  | Bool, Bool -> Typed.allclose ?equal_nan t1 t2
+  | Float, Float -> Typed.allclose ?equal_nan t1 t2
+  | _, _ -> false
+;;
 
 let eval_op (op : t Op.t) =
   match op with
