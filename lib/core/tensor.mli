@@ -3,7 +3,7 @@
 open! Core
 
 module Typed : sig
-  type 'a t [@@deriving sexp_of, compare]
+  type 'a t [@@deriving sexp_of]
 
   val type_ : 'a t -> 'a Type.t
   val type_equal_id : 'a Type_equal.Id.t -> 'a t Type_equal.Id.t

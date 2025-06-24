@@ -88,29 +88,6 @@ module Typed = struct
     if length t > 30 then [%sexp { dims : int array = dims t }] else sexp_of_t sexp_of_a t
   ;;
 
-  (* TODO: I'm pretty sure this doesn't give you a meaningful total order, but
-   that's fine, we just use it for a binary search tree. *)
-  let rec compare : 'a. ('a -> 'a -> int) -> 'a t -> 'a t -> int =
-    fun (type a) (compare_a : a -> a -> int) (t1 : a t) (t2 : a t) ->
-    if [%compare.equal: int array] (dims t1) (dims t2)
-    then Comparable.lift [%compare: int array] ~f:dims t1 t2
-    else (
-      let compare =
-        match dims t1 with
-        | [||] -> Comparable.lift [%compare: a] ~f:item
-        | [| n |] ->
-          Comparable.lift [%compare: a list] ~f:(fun t ->
-            List.init n ~f:(fun i -> get t [| i |]))
-        | dims ->
-          let first_dim = dims.(0) in
-          List.init first_dim ~f:(fun i ->
-            Comparable.lift (compare compare_a) ~f:(fun t ->
-              left_slice t ~indices:[| i |]))
-          |> Comparable.lexicographic
-      in
-      compare t1 t2)
-  ;;
-
   include Type_equal.Id.Create1 (struct
       type nonrec 'a t = 'a t [@@deriving sexp_of]
 
