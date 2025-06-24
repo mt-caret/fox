@@ -1,4 +1,4 @@
-(** A multi-dimensional array of floats.*)
+(** A multi-dimensional array of values *)
 
 open! Core
 
