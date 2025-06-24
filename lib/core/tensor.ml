@@ -14,6 +14,14 @@ module Typed = struct
         -> 'logical_type t
 
   let dims (T { bigarray; mapping = _ }) = Bigarray.Genarray.dims bigarray
+
+  let type_ (type a) (T { bigarray = _; mapping } : a t) : a Type.t =
+    match mapping with
+    | Float -> Float
+    | Bool -> Bool
+  ;;
+
+  let shape t : Shape.t = { dims = dims t; type_ = T (type_ t) }
   let num_dims (T { bigarray; mapping = _ }) = Bigarray.Genarray.num_dims bigarray
   let length t = dims t |> Array.fold ~init:1 ~f:( * )
 
@@ -57,12 +65,6 @@ module Typed = struct
 
   let left_slice (type a) (T { bigarray; mapping } : a t) ~indices : a t =
     T { bigarray = Bigarray.Genarray.slice_left bigarray indices; mapping }
-  ;;
-
-  let type_ (type a) (T { bigarray = _; mapping } : a t) : a Type.t =
-    match mapping with
-    | Float -> Float
-    | Bool -> Bool
   ;;
 
   let sexp_of_a (type a) (t : a t) : a -> Sexp.t =
@@ -327,6 +329,8 @@ let to_typed_exn (type a) (type_ : a Type.t) (T t) : a Typed.t =
 ;;
 
 let dims (T t) = Typed.dims t
+let type_ (T t) : Type.Packed.t = T (Typed.type_ t)
+let shape (T t) = Typed.shape t
 let num_dims (T t) = Typed.num_dims t
 let length (T t) = Typed.length t
 
@@ -387,17 +391,22 @@ let eval_op (op : t Op.t) =
        T (Typed.map Float t ~f))
   | Binary (kind, T t1, T t2) ->
     (match Typed.type_ t1, Typed.type_ t2 with
-     | Bool, _ | _, Bool ->
-       raise_s [%message "eval_op: bool tensors not supported" (op : t Op.t)]
+     | Bool, Bool ->
+       (match kind with
+        | Add | Sub | Mul | Div | Gt | Lt ->
+          raise_s [%message "eval_op: bool tensors not supported" (op : t Op.t)]
+        | Eq -> T (Typed.map2 Bool t1 t2 ~f:Bool.equal))
      | Float, Float ->
-       let f =
-         match kind with
-         | Add -> ( +. )
-         | Sub -> ( -. )
-         | Mul -> ( *. )
-         | Div -> ( /. )
-       in
-       T (Typed.map2 Float t1 t2 ~f))
+       (match kind with
+        | Add -> T (Typed.map2 Float t1 t2 ~f:( +. ))
+        | Sub -> T (Typed.map2 Float t1 t2 ~f:( -. ))
+        | Mul -> T (Typed.map2 Float t1 t2 ~f:( *. ))
+        | Div -> T (Typed.map2 Float t1 t2 ~f:( /. ))
+        | Eq -> T (Typed.map2 Bool t1 t2 ~f:Float.O.( = ))
+        | Gt -> T (Typed.map2 Bool t1 t2 ~f:Float.O.( > ))
+        | Lt -> T (Typed.map2 Bool t1 t2 ~f:Float.O.( < )))
+     | Bool, Float | Float, Bool ->
+       raise_s [%message "eval_op: mixed types not supported" (op : t Op.t)])
   | Matmul (T t1, T t2) ->
     (match Typed.type_ t1, Typed.type_ t2 with
      | Bool, _ | _, Bool ->
@@ -477,7 +486,7 @@ include Op.Make_operators (struct
 
     let eval = eval_op
     let of_float float = T (Typed.of_lit Float float)
-    let dims (T t) = Typed.dims t
+    let shape t : Shape.t = { dims = dims t; type_ = type_ t }
   end)
 
 let%expect_test "matmul" =
@@ -598,5 +607,6 @@ module Private = struct
     bigarray
   ;;
 
-  let of_bigarray bigarray = Typed.T { bigarray; mapping = Float }
+  let of_float_bigarray bigarray = Typed.T { bigarray; mapping = Float }
+  let of_char_bigarray bigarray = Typed.T { bigarray; mapping = Bool }
 end

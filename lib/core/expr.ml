@@ -4,7 +4,7 @@ module Var = struct
   module T = struct
     type t =
       { name : string
-      ; dims : int array
+      ; shape : Shape.t
       }
     [@@deriving compare, sexp, fields ~getters]
   end
@@ -13,12 +13,14 @@ module Var = struct
   include Comparable.Make_plain (T)
 
   let type_id = Type_equal.Id.create ~name:"Var" [%sexp_of: t]
+  let dims t = shape t |> Shape.dims
 
-  let to_string { name; dims } =
+  let to_string { name; shape = { dims; type_ } } =
     let dims =
       Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:","
     in
-    [%string "%{name}[%{dims}]"]
+    let type_ = [%sexp_of: Type.Packed.t] type_ |> Sexp.to_string |> String.lowercase in
+    [%string "%{name}[%{dims}]: %{type_}"]
   ;;
 end
 
@@ -29,25 +31,28 @@ module Atom = struct
   [@@deriving sexp_of]
 
   let to_string = function
-    | Var { name; dims = _ } -> name
+    | Var { name; shape = { dims = _; type_ = _ } } -> name
     | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
   ;;
 
-  let of_value (T { value = x; type_id; dims } as value : Value.t) ~(vars : Var.Set.t) : t
+  let of_value (T { value = x; type_id; shape } as value : Value.t) ~(vars : Var.Set.t)
+    : t
     =
     match Type_equal.Id.same_witness type_id Var.type_id with
     | Some T ->
-      [%test_eq: int array] dims (Var.dims x);
+      [%test_eq: Shape.t] shape (Var.shape x);
       (match Set.mem vars x with
        | true -> Var x
        | false -> Value value)
     | None -> Value value
   ;;
 
-  let dims = function
-    | Var var -> Var.dims var
-    | Value value -> Value.dims value
+  let shape = function
+    | Var var -> Var.shape var
+    | Value value -> Value.shape value
   ;;
+
+  let dims t = shape t |> Shape.dims
 end
 
 module Eq = struct

@@ -9,7 +9,7 @@ let f x =
 
 let%expect_test "eval" =
   Eval.handle ~f:(fun () -> f (Value.of_float 3.)) |> [%sexp_of: Value.t] |> print_s;
-  [%expect {| (Tensor 2.7177599838802657) |}]
+  [%expect {| (Tensor 2.7177599838802657 Float) |}]
 ;;
 
 let%expect_test "jvp" =
@@ -21,14 +21,14 @@ let%expect_test "jvp" =
     Value.cos (Value.of_float 3.) |> [%sexp_of: Value.t] |> print_s);
   [%expect
     {|
-    (Tensor -0.98999249660044542)
-    (Tensor -0.98999249660044542)
+    (Tensor -0.98999249660044542 Float)
+    (Tensor -0.98999249660044542 Float)
     |}];
   Eval.handle ~f:(fun () ->
     jvp' ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((Tensor 2.7177599838802657) (Tensor 2.9799849932008908)) |}];
+  [%expect {| ((Tensor 2.7177599838802657 Float) (Tensor 2.9799849932008908 Float)) |}];
   Eval.handle ~f:(fun () ->
     let deriv ~n =
       nth_order_derivative ~n ~f:Value.sin ~x:(Value.of_float 3.)
@@ -41,9 +41,9 @@ let%expect_test "jvp" =
     deriv ~n:4);
   [%expect
     {|
-    (Tensor -0.98999249660044542)
-    (Tensor -0.14112000805986721)
-    (Tensor 0.98999249660044542)
-    (Tensor 0.14112000805986721)
+    (Tensor -0.98999249660044542 Float)
+    (Tensor -0.14112000805986721 Float)
+    (Tensor 0.98999249660044542 Float)
+    (Tensor 0.14112000805986721 Float)
     |}]
 ;;

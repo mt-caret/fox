@@ -3,11 +3,12 @@ open! Core
 module Var : sig
   type t =
     { name : string
-    ; dims : int array
+    ; shape : Shape.t
     }
   [@@deriving compare, sexp, fields ~getters]
 
   val type_id : t Type_equal.Id.t
+  val dims : t -> int array
 
   include Comparable.S_plain with type t := t
 end
@@ -19,6 +20,7 @@ module Atom : sig
   [@@deriving sexp_of]
 
   val of_value : Value.t -> vars:Var.Set.t -> t
+  val shape : t -> Shape.t
   val dims : t -> int array
 end
 

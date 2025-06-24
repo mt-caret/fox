@@ -8,6 +8,7 @@ module Typed : sig
   val type_ : 'a t -> 'a Type.t
   val type_equal_id : 'a Type_equal.Id.t -> 'a t Type_equal.Id.t
   val dims : 'a t -> int array
+  val shape : 'a t -> Shape.t
   val num_dims : 'a t -> int
   val length : 'a t -> int
   val item : 'a t -> 'a
@@ -41,6 +42,8 @@ type t = T : 'a Typed.t -> t [@@deriving sexp_of]
 val of_typed : 'a Typed.t -> t
 val to_typed_exn : 'a Type.t -> t -> 'a Typed.t
 val dims : t -> int array
+val type_ : t -> Type.Packed.t
+val shape : t -> Shape.t
 val num_dims : t -> int
 val length : t -> int
 val item_exn : 'a Type.t -> t -> 'a
@@ -77,7 +80,11 @@ module Private : sig
     :  float Typed.t
     -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
 
-  val of_bigarray
+  val of_float_bigarray
     :  (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
     -> float Typed.t
+
+  val of_char_bigarray
+    :  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Genarray.t
+    -> bool Typed.t
 end

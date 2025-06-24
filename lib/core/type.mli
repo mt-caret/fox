@@ -9,5 +9,5 @@ val type_equal_id : 'a t -> 'a Type_equal.Id.t
 
 module Packed : sig
   type 'a typed := 'a t
-  type t = T : 'a typed -> t [@@deriving enumerate]
+  type t = T : 'a typed -> t [@@deriving enumerate, equal, compare, sexp]
 end

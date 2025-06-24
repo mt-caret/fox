@@ -3,12 +3,7 @@ open! Fox_core
 open! Base_quickcheck
 
 module Dims = struct
-  module T = struct
-    type t = int array [@@deriving quickcheck, sexp_of, compare]
-  end
-
-  include T
-  include Comparable.Make_plain (T)
+  type t = int array [@@deriving quickcheck, sexp_of, compare]
 
   let quickcheck_generator =
     Generator.fixed_point (fun quickcheck_generator ->
@@ -101,6 +96,9 @@ module Op = struct
       | Sub
       | Mul
       | Div
+      | Eq
+      | Gt
+      | Lt
     [@@deriving quickcheck]
   end
 
@@ -154,37 +152,45 @@ let generator_filter_bind generator ~f =
   Generator.create loop
 ;;
 
-let op_generator ~values_by_dims =
+let op_generator ~values_by_shape =
   let open Generator.Let_syntax in
   Op.quickcheck_generator Generator.unit
   |> generator_filter_bind ~f:(function
     | Unary (kind, ()) ->
-      let%map value =
-        choose (Map.keys values_by_dims) >>| Map.find_exn values_by_dims >>= choose
+      let valid_shapes =
+        Map.keys values_by_shape
+        |> List.filter ~f:(fun shape ->
+          Fox_core.Op.infer_shape (Op.Unary (kind, shape)) |> Or_error.is_ok)
       in
+      let%map value = choose valid_shapes >>| Map.find_exn values_by_shape >>= choose in
       Some (Op.Unary (kind, value))
     | Binary (kind, (), ()) ->
-      let%bind values =
-        choose (Map.keys values_by_dims) >>| Map.find_exn values_by_dims
+      let valid_shapes =
+        Map.keys values_by_shape
+        |> List.filter ~f:(fun shape ->
+          Fox_core.Op.infer_shape (Op.Binary (kind, shape, shape)) |> Or_error.is_ok)
       in
+      let%bind values = choose valid_shapes >>| Map.find_exn values_by_shape in
       let%map value1 = choose values
       and value2 = choose values in
       Some (Op.Binary (kind, value1, value2))
     | Matmul ((), ()) ->
       (match
-         let%bind.Option all_dims =
+         let%bind.Option all_shapes =
            match
-             Map.keys values_by_dims |> List.filter ~f:(fun dims -> Array.length dims = 2)
+             Map.keys values_by_shape
+             |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) = 2)
            with
            | [] -> None
-           | all_dims -> Some all_dims
+           | all_shapes -> Some all_shapes
          in
          match
-           List.concat_map all_dims ~f:(fun lhs_dims ->
-             List.filter_map all_dims ~f:(fun rhs_dims ->
-               match lhs_dims, rhs_dims with
-               | [| _; m |], [| m' |] | [| _; m |], [| m'; _ |] ->
-                 Option.some_if (m = m') (lhs_dims, rhs_dims)
+           List.concat_map all_shapes ~f:(fun lhs_shape ->
+             List.filter_map all_shapes ~f:(fun rhs_shape ->
+               match lhs_shape, rhs_shape with
+               | { dims = [| _; m |]; type_ = _ }, { dims = [| m' |]; type_ = _ }
+               | { dims = [| _; m |]; type_ = _ }, { dims = [| m'; _ |]; type_ = _ } ->
+                 Option.some_if (m = m') (lhs_shape, rhs_shape)
                | _ -> None))
          with
          | [] -> None
@@ -193,22 +199,23 @@ let op_generator ~values_by_dims =
        | None -> return None
        | Some dim_pairs ->
          let%bind lhs_dims, rhs_dims = choose dim_pairs in
-         let%map lhs = Map.find_exn values_by_dims lhs_dims |> choose
-         and rhs = Map.find_exn values_by_dims rhs_dims |> choose in
+         let%map lhs = Map.find_exn values_by_shape lhs_dims |> choose
+         and rhs = Map.find_exn values_by_shape rhs_dims |> choose in
          Some (Op.Matmul (lhs, rhs)))
     | Transpose () ->
       (match
-         Map.keys values_by_dims |> List.filter ~f:(fun dims -> Array.length dims = 2)
+         Map.keys values_by_shape
+         |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) = 2)
        with
        | [] -> return None
        | all_dims ->
-         let%map value = choose all_dims >>| Map.find_exn values_by_dims >>= choose in
+         let%map value = choose all_dims >>| Map.find_exn values_by_shape >>= choose in
          Some (Op.Transpose value))
     | Sum { value = (); dims; keep_dims = _ } ->
       (match dims with
        | `All ->
          let%map value =
-           choose (Map.keys values_by_dims) >>| Map.find_exn values_by_dims >>= choose
+           choose (Map.keys values_by_shape) >>| Map.find_exn values_by_shape >>= choose
          in
          Some (Op.Sum { value; dims = `All; keep_dims = true })
        | `Just dims ->
@@ -217,43 +224,47 @@ let op_generator ~values_by_dims =
            |> Nonempty_list.max_elt' ~compare:Int.compare
          in
          (match
-            Map.keys values_by_dims
-            |> List.filter ~f:(fun dims -> Array.length dims > max_index)
+            Map.keys values_by_shape
+            |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) > max_index)
           with
           | [] -> return None
-          | all_dims ->
-            let%map value = choose all_dims >>| Map.find_exn values_by_dims >>= choose in
+          | all_shapes ->
+            let%map value =
+              choose all_shapes >>| Map.find_exn values_by_shape >>= choose
+            in
             Some (Op.Sum { value; dims = `Just dims; keep_dims = true })))
     | (Broadcast { value = (); dims = _ } | Reshape { value = (); dims = _ }) as op ->
       (match
-         Map.keys values_by_dims
-         |> List.filter ~f:(fun input_dims ->
-           Fox_core.Op.map op ~f:(fun () -> input_dims)
-           |> Fox_core.Op.infer_dims
+         Map.keys values_by_shape
+         |> List.filter ~f:(fun input_shape ->
+           Fox_core.Op.map op ~f:(fun () -> input_shape)
+           |> Fox_core.Op.infer_shape
            |> Or_error.is_ok)
        with
        | [] -> return None
        | all_dims ->
-         let%map value = choose all_dims >>| Map.find_exn values_by_dims >>= choose in
+         let%map value = choose all_dims >>| Map.find_exn values_by_shape >>= choose in
          Some (Fox_core.Op.map op ~f:(fun () -> value))))
 ;;
 
 let expr_generator ~op_nums =
   let open Generator.Let_syntax in
   let%bind dims = Dims.quickcheck_generator in
-  let arg : Expr.Var.t = { name = "arg"; dims } in
-  let%map _values_by_dims, equations =
+  let arg : Expr.Var.t = { name = "arg"; shape = { dims; type_ = T Float } } in
+  let%map _values_by_shape, equations =
     List.range 0 op_nums
     |> List.fold
-         ~init:(return (Dims.Map.singleton dims [ Expr.Atom.Var arg ], []))
+         ~init:
+           (return
+              (Shape.Map.singleton { dims; type_ = T Float } [ Expr.Atom.Var arg ], []))
          ~f:(fun accum i ->
-           let%bind values_by_dims, equations = accum in
-           let%map op = op_generator ~values_by_dims in
-           let dims =
-             Fox_core.Op.map op ~f:Expr.Atom.dims |> Fox_core.Op.infer_dims_exn
+           let%bind values_by_shape, equations = accum in
+           let%map op = op_generator ~values_by_shape in
+           let shape =
+             Fox_core.Op.map op ~f:Expr.Atom.shape |> Fox_core.Op.infer_shape_exn
            in
-           let var : Expr.Var.t = { name = [%string "v_%{i#Int}"]; dims } in
-           ( Map.add_multi values_by_dims ~key:dims ~data:(Expr.Atom.Var var)
+           let var : Expr.Var.t = { name = [%string "v_%{i#Int}"]; shape } in
+           ( Map.add_multi values_by_shape ~key:shape ~data:(Expr.Atom.Var var)
            , { Expr.Eq.var; op } :: equations ))
   in
   let out = List.hd_exn equations |> Expr.Eq.var in
@@ -261,7 +272,7 @@ let expr_generator ~op_nums =
     ~parameters:[ arg ]
     ~equations:(List.rev equations)
     ~return_vals:[ Expr.Atom.Var out ]
-    ~out_tree_def:(Value_tree.Def.leaf ~dims:out.dims)
+    ~out_tree_def:(Value_tree.Def.leaf ~dims:(Expr.Var.dims out))
 ;;
 
 let%expect_test "expr_generator" =
@@ -273,34 +284,34 @@ let%expect_test "expr_generator" =
   done;
   [%expect
     {|
-    arg[4] ->
-    v_0[4] = broadcast arg dims=[4];
+    arg[4]: float ->
+    v_0[4]: float = broadcast arg dims=[4];
     ( v_0 )
     --------------------------------
-    arg[2,2] ->
-    v_0[2,2] = add arg arg;
-    v_1[2,2] = sin v_0;
+    arg[2,2]: float ->
+    v_0[2,2]: float = sub arg arg;
+    v_1[2,2]: float = sin v_0;
     ( v_1 )
     --------------------------------
-    arg[5] ->
-    v_0[5] = sub arg arg;
-    v_1[5] = div v_0 v_0;
-    v_2[5] = cos v_0;
+    arg[5]: float ->
+    v_0[5]: float = div arg arg;
+    v_1[5]: bool = lt v_0 v_0;
+    v_2[5]: float = cos arg;
     ( v_2 )
     --------------------------------
-    arg[4] ->
-    v_0[4] = sub arg arg;
-    v_1[4] = div arg arg;
-    v_2[4] = div arg v_0;
-    v_3[4] = div v_1 arg;
+    arg[4]: float ->
+    v_0[4]: float = sub arg arg;
+    v_1[4]: bool = lt arg arg;
+    v_2[4]: bool = gt arg arg;
+    v_3[4]: bool = lt arg arg;
     ( v_3 )
     --------------------------------
-    arg[4] ->
-    v_0[4] = div arg arg;
-    v_1[4] = sin v_0;
-    v_2[4] = reshape arg dims=[4];
-    v_3[4] = mul v_2 v_2;
-    v_4[4] = div v_2 arg;
+    arg[4]: float ->
+    v_0[4]: bool = gt arg arg;
+    v_1[4]: float = sin arg;
+    v_2[4]: bool = reshape v_0 dims=[4];
+    v_3[4]: float = div v_1 v_1;
+    v_4[4]: bool = lt arg v_1;
     ( v_4 )
     --------------------------------
     |}]
@@ -311,7 +322,7 @@ let fun_generator ~op_nums =
   let%bind expr = expr_generator ~op_nums in
   match Expr.parameters expr with
   | [ var ] ->
-    let%map tensor = Tensor.quickcheck_generator_with_dims ~dims:var.dims in
+    let%map tensor = Tensor.quickcheck_generator_with_dims ~dims:(Expr.Var.dims var) in
     tensor, expr
   | _ -> failwith "fun_generator: expected 1 parameter"
 ;;
@@ -345,8 +356,8 @@ let%expect_test "grad+jit vs grad+eval" =
     ~x:(Value.of_float 1.);
   [%expect
     {|
-    (Tensor 2)
-    (Tensor 2)
+    (Tensor 2 Float)
+    (Tensor 2 Float)
     |}];
   test
     ~f:(fun value ->
@@ -354,16 +365,16 @@ let%expect_test "grad+jit vs grad+eval" =
     ~x:(Value.of_tensor (Tensor.of_list Float [ 1.; 1. ]));
   [%expect
     {|
-    (Tensor (0 0) (dims (2)))
-    (Tensor (0 0) (dims (2)))
+    (Tensor (0 0) (dims (2)) (type_ Float))
+    (Tensor (0 0) (dims (2)) (type_ Float))
     |}];
   test
     ~f:(fun value -> grad' ~f:(fun value -> Value.sqrt value |> Value.sum) ~x:value)
     ~x:(Value.of_tensor (Tensor.of_list Float [ 1.; 1. ]));
   [%expect
     {|
-    (Tensor (0.5 0.5) (dims (2)))
-    (Tensor (0.5 0.5) (dims (2)))
+    (Tensor (0.5 0.5) (dims (2)) (type_ Float))
+    (Tensor (0.5 0.5) (dims (2)) (type_ Float))
     |}]
 ;;
 
@@ -378,7 +389,20 @@ let%expect_test "eval grad expr vs xla" =
     ~sexp_of:(fun (tensor, expr) ->
       [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
     ~f:(fun (tensor, expr) ->
-      let f value = grad' ~f:(fun value -> eval_expr' expr value |> Value.sum) ~x:value in
+      let f value =
+        grad'
+          ~f:(fun value ->
+            let expr_result = eval_expr' expr value in
+            let expr_result_shape = Value.shape expr_result in
+            match Shape.type_ expr_result_shape with
+            | T Float -> Value.sum expr_result
+            | T Bool ->
+              (* TODO: somehow prevent return type from being a boolean? *)
+              (* We can't really differentiate bool tensors, so we just sum the
+                input instead. *)
+              Value.sum value)
+          ~x:value
+      in
       let value = Value.of_tensor tensor in
       let eval_result = Eval.handle ~f:(fun () -> f value) in
       let xla_result = Fox_jit.jit' ~f value in

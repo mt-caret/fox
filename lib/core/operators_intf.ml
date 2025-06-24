@@ -14,6 +14,9 @@ module type S = sig
   val sub : t -> t -> t
   val mul : t -> t -> t
   val div : t -> t -> t
+  val eq : t -> t -> t
+  val gt : t -> t -> t
+  val lt : t -> t -> t
   val matmul : t -> t -> t
   val transpose : t -> t
   val reshape : t -> dims:int array -> t
@@ -44,5 +47,8 @@ module type S = sig
     val ( - ) : t -> t -> t
     val ( * ) : t -> t -> t
     val ( / ) : t -> t -> t
+    val ( = ) : t -> t -> t
+    val ( > ) : t -> t -> t
+    val ( < ) : t -> t -> t
   end
 end

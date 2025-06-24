@@ -18,6 +18,9 @@ module Binary : sig
     | Sub
     | Mul
     | Div
+    | Eq
+    | Gt
+    | Lt
   [@@deriving sexp, enumerate]
 end
 
@@ -45,8 +48,8 @@ val map : 'a t -> f:('a -> 'b) -> 'b t
 val to_list : 'a t -> 'a list
 val eval : (module Operators_intf.S with type t = 'a) -> 'a t -> 'a
 val to_string : 'a t -> f:('a -> string) -> string
-val infer_dims : int array t -> int array Or_error.t
-val infer_dims_exn : int array t -> int array
+val infer_shape : Shape.t t -> Shape.t Or_error.t
+val infer_shape_exn : Shape.t t -> Shape.t
 
 module Make_operators (M : sig
     type 'a op := 'a t
@@ -54,5 +57,5 @@ module Make_operators (M : sig
 
     val of_float : float -> t
     val eval : t op -> t
-    val dims : t -> int array
+    val shape : t -> Shape.t
   end) : Operators_intf.S with type t := M.t

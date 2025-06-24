@@ -15,12 +15,15 @@ let of_typed_tensor (type a) (tensor : a Tensor.Typed.t) =
   let type_id =
     Tensor.Typed.type_ tensor |> Type.type_equal_id |> Tensor.Typed.type_equal_id
   in
-  T { value = tensor; type_id; dims = Tensor.Typed.dims tensor }
+  T { value = tensor; type_id; shape = Tensor.Typed.shape tensor }
 ;;
 
 let of_tensor (Tensor.T tensor) = of_typed_tensor tensor
 
-let to_typed_tensor_exn (type a) (type_ : a Type.t) (T { value; type_id; dims = _ } as t)
+let to_typed_tensor_exn
+      (type a)
+      (type_ : a Type.t)
+      (T { value; type_id; shape = { dims = _; type_ = _ } } as t)
   : a Tensor.Typed.t
   =
   match
@@ -32,18 +35,13 @@ let to_typed_tensor_exn (type a) (type_ : a Type.t) (T { value; type_id; dims = 
   | None -> raise_s [%message "Invalid value" (t : t)]
 ;;
 
-let to_tensor_exn (T { value; type_id; dims = _ } as t) =
+let to_tensor_exn (T { value; type_id; shape = { dims = _; type_ = T type_ } } as t) =
   match
-    List.find_map Type.Packed.all ~f:(fun (T type_) ->
-      match
-        Type_equal.Id.same_witness
-          type_id
-          (Type.type_equal_id type_ |> Tensor.Typed.type_equal_id)
-      with
-      | Some T -> Some (Tensor.T value)
-      | None -> None)
+    Type_equal.Id.same_witness
+      type_id
+      (Type.type_equal_id type_ |> Tensor.Typed.type_equal_id)
   with
-  | Some tensor -> tensor
+  | Some T -> Tensor.T value
   | None -> raise_s [%message "Invalid value" (t : t)]
 ;;
 
@@ -55,7 +53,7 @@ include Op.Make_operators (struct
 
     let of_float float = of_typed_tensor (Tensor.Typed.of_lit Float float)
     let eval op = Effect.perform (Fox_effect.Op op)
-    let dims = dims
+    let shape = shape
   end)
 
 module Tuple2 = struct

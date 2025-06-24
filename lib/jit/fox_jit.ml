@@ -1,8 +1,16 @@
 open! Core
 open! Fox_core
 
-let tensor_of_xla_literal literal =
-  Xla.Literal.to_bigarray literal ~kind:Bigarray.float64 |> Tensor.Private.of_bigarray
+let tensor_of_xla_literal literal ~shape =
+  match Shape.type_ shape with
+  | T Float ->
+    Xla.Literal.to_bigarray literal ~kind:Bigarray.float64
+    |> Tensor.Private.of_float_bigarray
+    |> Tensor.of_typed
+  | T Bool ->
+    Xla.Literal.to_bigarray literal ~kind:Bigarray.char
+    |> Tensor.Private.of_char_bigarray
+    |> Tensor.of_typed
 ;;
 
 let tensor_to_xla_literal tensor =
@@ -21,7 +29,7 @@ let xla_subcomp
     | Value value ->
       let tensor = Value.to_typed_tensor_exn Float value in
       let op = tensor_to_xla_literal tensor |> Xla.Op.constant ~builder in
-      op, Tensor.Typed.dims tensor
+      op, Tensor.Typed.shape tensor
   in
   let env =
     List.fold equations ~init:env ~f:(fun env { var; op } ->
@@ -58,20 +66,25 @@ let xla_subcomp
             | Sub -> Xla.Op.sub
             | Mul -> Xla.Op.mul
             | Div -> Xla.Op.div
+            | Eq -> Xla.Op.eq
+            | Gt -> Xla.Op.gt
+            | Lt -> Xla.Op.lt
           in
           f a b
         | Matmul ((a, _), (b, _)) -> Xla.Op.matmul a b
         | Transpose (a, _) ->
           (* TODO: support arbitrary dimensions *)
           Xla.Op.transpose a ~dim_indexes:[| 1; 0 |]
-        | Sum { value = value, in_dims; dims; keep_dims } ->
+        | Sum { value = value, in_shape; dims; keep_dims } ->
+          let in_dims = Shape.dims in_shape in
           let dims =
             match dims with
             | `All -> Array.init (Array.length in_dims) ~f:Fn.id
             | `Just dims -> Nonempty_list.to_list dims |> Array.of_list
           in
           Xla.Op.reduce_sum value ~dims ~keep_dims
-        | Broadcast { value = value, in_dims; dims = out_dims } ->
+        | Broadcast { value = value, in_shape; dims = out_dims } ->
+          let in_dims = Shape.dims in_shape in
           let padding_length = Array.length out_dims - Array.length in_dims in
           Xla.Op.broadcast_in_dim
             value
@@ -79,12 +92,15 @@ let xla_subcomp
             ~broadcast_dims:(Array.mapi in_dims ~f:(fun i _ -> padding_length + i))
         | Reshape { value = value, _; dims } -> Xla.Op.reshape value ~dims
       in
-      let dims = Op.map op ~f:snd |> Op.infer_dims_exn in
-      Map.add_exn env ~key:var ~data:(xla_op, dims))
+      let shape = Op.map op ~f:snd |> Op.infer_shape_exn in
+      Map.add_exn env ~key:var ~data:(xla_op, shape))
   in
-  Nonempty_list.map return_vals ~f:(fun atom -> read_atom atom ~env |> fst)
-  |> Nonempty_list.to_list
-  |> Xla.Op.tuple ~builder
+  let ops, shapes =
+    Nonempty_list.map return_vals ~f:(fun atom -> read_atom atom ~env)
+    |> Nonempty_list.to_list
+    |> List.unzip
+  in
+  Xla.Op.tuple ops ~builder, shapes
 ;;
 
 let xla_builder = lazy (Xla.Builder.create ~name:"xla_call")
@@ -92,11 +108,20 @@ let xla_builder = lazy (Xla.Builder.create ~name:"xla_call")
 let xla_callable ?(print_hlo = false) (expr : Expr.t) =
   let xla_builder = Lazy.force xla_builder in
   let xla_params =
-    List.mapi expr.parameters ~f:(fun i { name; dims } ->
+    List.mapi expr.parameters ~f:(fun i { name; shape = { dims; type_ } as shape } ->
       (* TODO: right now we assume all parameters are single-element tensors. *)
-      Xla.Op.parameter name ~id:i ~ty:F64 ~dims ~builder:xla_builder, dims)
+      ( Xla.Op.parameter
+          name
+          ~id:i
+          ~ty:
+            (match type_ with
+             | T Float -> F64
+             | T Bool -> Pred)
+          ~dims
+          ~builder:xla_builder
+      , shape ))
   in
-  let out = xla_subcomp expr xla_params ~builder:xla_builder in
+  let out, out_shapes = xla_subcomp expr xla_params ~builder:xla_builder in
   let xla_client = Xla.Client.cpu () in
   let xla_device = Xla.Client.addressable_devices xla_client |> List.hd_exn in
   let computation = Xla.Computation.build ~root:out in
@@ -115,11 +140,12 @@ let xla_callable ?(print_hlo = false) (expr : Expr.t) =
     in
     let buffers = Xla.Executable.execute_b xla_exe inputs in
     let buffer = buffers.(0).(0) in
-    Xla.Buffer.to_literal_sync buffer
-    |> Xla.Literal.decompose_tuple
-    |> Array.to_list
+    let out_literals =
+      Xla.Buffer.to_literal_sync buffer |> Xla.Literal.decompose_tuple |> Array.to_list
+    in
+    List.zip_exn out_literals out_shapes
     |> Nonempty_list.of_list_exn
-    |> Nonempty_list.map ~f:tensor_of_xla_literal)
+    |> Nonempty_list.map ~f:(fun (literal, shape) -> tensor_of_xla_literal literal ~shape))
 ;;
 
 (* TODO: One crucial difference between the implementation here and autodidax is
@@ -147,7 +173,7 @@ let jit
   let output =
     xla_callable flattened_input_tensors
     |> Nonempty_list.to_list
-    |> List.map ~f:Value.of_typed_tensor
+    |> List.map ~f:Value.of_tensor
   in
   Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree
 ;;
@@ -169,7 +195,7 @@ let%expect_test "jit'" =
       %multiply.4 = f64[] multiply(f64[] %v_0.1, f64[] %add.3)
       ROOT %tuple.5 = (f64[]) tuple(f64[] %multiply.4)
     }
-    (Tensor 10)
+    (Tensor 10 Float)
     |}];
   (* Two-argument function *)
   jit
@@ -192,7 +218,7 @@ let%expect_test "jit'" =
       %multiply.11 = f64[] multiply(f64[] %sine.10, f64[] %cosine.9)
       ROOT %tuple.12 = (f64[]) tuple(f64[] %multiply.11)
     }
-    (Tensor -0.90019762973551742)
+    (Tensor -0.90019762973551742 Float)
     |}]
 ;;
 
@@ -217,7 +243,7 @@ let%expect_test "jit and matmul" =
       %dot.16 = f64[2,2]{1,0} dot(f64[2,2]{1,0} %v_0.14, f64[2,2]{1,0} %v_1.15), lhs_contracting_dims={1}, rhs_contracting_dims={0}
       ROOT %tuple.17 = (f64[2,2]{1,0}) tuple(f64[2,2]{1,0} %dot.16)
     }
-    (Tensor ((19 22) (43 50)) (dims (2 2)))
+    (Tensor ((19 22) (43 50)) (dims (2 2)) (type_ Float))
     |}]
 ;;
 
@@ -244,7 +270,7 @@ let%expect_test "jit and sum" =
       %reduce.25 = f64[] reduce(f64[2,2]{1,0} %v_0.19, f64[] %constant.20), dimensions={0,1}, to_apply=%sum.21
       ROOT %tuple.26 = (f64[]) tuple(f64[] %reduce.25)
     }
-    (Tensor 10)
+    (Tensor 10 Float)
     |}]
 ;;
 
@@ -264,6 +290,6 @@ let%expect_test "jit and broadcast" =
       %broadcast.29 = f64[2,2,2]{2,1,0} broadcast(f64[2,2]{1,0} %v_0.28), dimensions={1,2}
       ROOT %tuple.30 = (f64[2,2,2]{2,1,0}) tuple(f64[2,2,2]{2,1,0} %broadcast.29)
     }
-    (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2)))
+    (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2)) (type_ Float))
     |}]
 ;;

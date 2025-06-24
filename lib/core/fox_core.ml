@@ -3,6 +3,7 @@ open! Effect
 open! Effect.Deep
 module Expr = Expr
 module Op = Op
+module Shape = Shape
 module Tensor = Tensor
 module Treeable = Treeable
 module Treeable_intf = Treeable_intf
@@ -49,19 +50,19 @@ let foo x = Value.O.(x * (x + Value.of_float 3.))
 
 let%expect_test "foo" =
   Eval.handle ~f:(fun () -> foo (Value.of_float 2.)) |> [%sexp_of: Value.t] |> print_s;
-  [%expect {| (Tensor 10) |}]
+  [%expect {| (Tensor 10 Float) |}]
 ;;
 
 module Dual_number = struct
   type t =
     { primal : Value.t
-    ; tangent : Value.t
+    ; tangent : Value.t option
     ; id : Id.t
     }
   [@@deriving sexp_of, fields ~getters]
 
   let type_id = Type_equal.Id.create ~name:"Dual_number" [%sexp_of: t]
-  let to_value t : Value.t = T { value = t; type_id; dims = Value.dims t.primal }
+  let to_value t : Value.t = T { value = t; type_id; shape = Value.shape t.primal }
 end
 
 module Jvp = struct
@@ -70,16 +71,25 @@ module Jvp = struct
   let create () = { id = Id.create () }
 
   let dual_number t ~primal ~tangent : Dual_number.t =
-    [%test_eq: int array] (Value.dims primal) (Value.dims tangent);
+    Option.iter tangent ~f:(fun tangent ->
+      [%test_eq: int array] (Value.dims primal) (Value.dims tangent);
+      assert (Type.Packed.equal (Value.type_ primal) (Value.type_ tangent)));
     { primal; tangent; id = t.id }
   ;;
 
-  let lift t (T { value = x; type_id; dims } as value : Value.t) : Dual_number.t =
+  let lift t (T { value = x; type_id; shape = { dims; type_ } } as value : Value.t)
+    : Dual_number.t
+    =
     let zeros () = Value.of_typed_tensor (Tensor.Typed.create Float ~dims 0.) in
     match Type_equal.Id.same_witness type_id Dual_number.type_id with
     | Some T ->
-      if Id.equal t.id x.id then x else dual_number t ~primal:value ~tangent:(zeros ())
-    | None -> dual_number t ~primal:value ~tangent:(zeros ())
+      if Id.equal t.id x.id
+      then x
+      else dual_number t ~primal:value ~tangent:(Some (zeros ()))
+    | None ->
+      (match type_ with
+       | T Float -> dual_number t ~primal:value ~tangent:(Some (zeros ()))
+       | T Bool -> dual_number t ~primal:value ~tangent:None)
   ;;
 
   let handle t ~f =
@@ -88,90 +98,118 @@ module Jvp = struct
       let result =
         match Op.map op ~f:(lift t) with
         | Unary (Neg, a) ->
-          dual_number t ~primal:Value.O.(-a.primal) ~tangent:Value.O.(-a.tangent)
+          dual_number
+            t
+            ~primal:Value.O.(-a.primal)
+            ~tangent:(Option.map a.tangent ~f:Value.neg)
         | Unary (Sin, a) ->
           dual_number
             t
             ~primal:(Value.sin a.primal)
-            ~tangent:Value.O.(Value.cos a.primal * a.tangent)
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(Value.cos a.primal * tangent)))
         | Unary (Cos, a) ->
           dual_number
             t
             ~primal:(Value.cos a.primal)
-            ~tangent:Value.O.(-Value.sin a.primal * a.tangent)
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(-Value.sin a.primal * tangent)))
         | Unary (Sqrt, a) ->
           dual_number
             t
             ~primal:(Value.sqrt a.primal)
-            ~tangent:(Value.div a.tangent (Value.scale (Value.sqrt a.primal) 2.))
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.div tangent (Value.scale (Value.sqrt a.primal) 2.)))
         | Unary (Exp, a) ->
           dual_number
             t
             ~primal:(Value.exp a.primal)
-            ~tangent:Value.O.(Value.exp a.primal * a.tangent)
+            ~tangent:
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(Value.exp a.primal * tangent)))
         | Unary (Log, a) ->
           dual_number
             t
             ~primal:(Value.log a.primal)
-            ~tangent:(Value.div a.tangent a.primal)
+            ~tangent:(Option.map a.tangent ~f:(fun tangent -> Value.div tangent a.primal))
         | Unary (Sigmoid, a) ->
           dual_number
             t
             ~primal:(Value.sigmoid a.primal)
             ~tangent:
-              Value.O.(
-                Value.sigmoid a.primal
-                * ((Value.of_float 1. |> Value.broadcast ~dims:(Value.dims a.primal))
-                   - Value.sigmoid a.primal)
-                * a.tangent)
+              (Option.map a.tangent ~f:(fun tangent ->
+                 Value.O.(
+                   Value.sigmoid a.primal
+                   * ((Value.of_float 1. |> Value.broadcast ~dims:(Value.dims a.primal))
+                      - Value.sigmoid a.primal)
+                   * tangent)))
         | Binary (Add, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal + b.primal)
-            ~tangent:Value.O.(a.tangent + b.tangent)
+            ~tangent:
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(a_tangent + b_tangent)))
         | Binary (Sub, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal - b.primal)
-            ~tangent:Value.O.(a.tangent - b.tangent)
+            ~tangent:
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(a_tangent - b_tangent)))
         | Binary (Mul, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal * b.primal)
-            ~tangent:Value.O.((a.tangent * b.primal) + (a.primal * b.tangent))
+            ~tangent:
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.((a_tangent * b.primal) + (a.primal * b_tangent))))
         | Binary (Div, a, b) ->
           dual_number
             t
             ~primal:Value.O.(a.primal / b.primal)
             ~tangent:
-              Value.O.(
-                ((a.tangent * b.primal) - (a.primal * b.tangent)) / (b.primal * b.primal))
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(
+                   ((a_tangent * b.primal) - (a.primal * b_tangent))
+                   / (b.primal * b.primal))))
+        | Binary (Eq, a, b) ->
+          dual_number t ~primal:Value.O.(a.primal = b.primal) ~tangent:None
+        | Binary (Gt, a, b) ->
+          dual_number t ~primal:Value.O.(a.primal > b.primal) ~tangent:None
+        | Binary (Lt, a, b) ->
+          dual_number t ~primal:Value.O.(a.primal < b.primal) ~tangent:None
         | Matmul (a, b) ->
           dual_number
             t
             ~primal:(Value.matmul a.primal b.primal)
             ~tangent:
-              Value.O.(Value.matmul a.tangent b.primal + Value.matmul a.primal b.tangent)
+              (Option.map2 a.tangent b.tangent ~f:(fun a_tangent b_tangent ->
+                 Value.O.(
+                   Value.matmul a_tangent b.primal + Value.matmul a.primal b_tangent)))
         | Transpose a ->
           dual_number
             t
             ~primal:(Value.transpose a.primal)
-            ~tangent:(Value.transpose a.tangent)
+            ~tangent:(Option.map a.tangent ~f:Value.transpose)
         | Sum { value; dims; keep_dims } ->
           dual_number
             t
             ~primal:(Value.sum ~dims ~keep_dims value.primal)
-            ~tangent:(Value.sum ~dims ~keep_dims value.tangent)
+            ~tangent:(Option.map value.tangent ~f:(Value.sum ~dims ~keep_dims))
         | Broadcast { value; dims } ->
           dual_number
             t
             ~primal:(Value.broadcast ~dims value.primal)
-            ~tangent:(Value.broadcast ~dims value.tangent)
+            ~tangent:(Option.map value.tangent ~f:(Value.broadcast ~dims))
         | Reshape { value; dims } ->
           dual_number
             t
             ~primal:(Value.reshape value.primal ~dims)
-            ~tangent:(Value.reshape value.tangent ~dims)
+            ~tangent:(Option.map value.tangent ~f:(Value.reshape ~dims))
       in
       continue k (Dual_number.to_value result)
   ;;
@@ -194,7 +232,7 @@ let jvp
   let inputs =
     List.zip_exn (Value_tree.flatten primals_tree) (Value_tree.flatten tangents_tree)
     |> List.map ~f:(fun (primal, tangent) ->
-      Dual_number.to_value (Jvp.dual_number jvp ~primal ~tangent))
+      Dual_number.to_value (Jvp.dual_number jvp ~primal ~tangent:(Some tangent)))
   in
   let f, out_tree_def =
     flatten_function
@@ -208,7 +246,8 @@ let jvp
   let primals, tangents =
     Jvp.handle jvp ~f:(fun () -> f inputs)
     |> List.map ~f:(Jvp.lift jvp)
-    |> List.map ~f:(fun { primal; tangent; id = _ } -> primal, tangent)
+    |> List.map ~f:(fun { primal; tangent; id = _ } ->
+      primal, Option.value_exn ~message:"None tangent not supported in jvp" tangent)
     |> List.unzip
   in
   let out_tree_def = Set_once.get_exn out_tree_def [%here] in
@@ -226,7 +265,7 @@ let%expect_test "jvp'" =
       ~tangents:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((Tensor 10) (Tensor 7)) |}]
+  [%expect {| ((Tensor 10 Float) (Tensor 7 Float)) |}]
 ;;
 
 let jvp' ~f ~primal ~tangent =
@@ -238,7 +277,7 @@ let%expect_test "jvp" =
     jvp' ~f:foo ~primal:(Value.of_float 2.) ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((Tensor 10) (Tensor 7)) |}];
+  [%expect {| ((Tensor 10 Float) (Tensor 7 Float)) |}];
   Eval.handle ~f:(fun () ->
     jvp'
       ~f:(fun x ->
@@ -248,7 +287,7 @@ let%expect_test "jvp" =
       ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((Tensor 7) (Tensor 2)) |}]
+  [%expect {| ((Tensor 7 Float) (Tensor 2 Float)) |}]
 ;;
 
 let derivative ~f ~x =
@@ -269,15 +308,15 @@ let%expect_test "nth_order_derivative" =
     |> print_s
   in
   print ~n:0;
-  [%expect {| (Tensor 10) |}];
+  [%expect {| (Tensor 10 Float) |}];
   print ~n:1;
-  [%expect {| (Tensor 7) |}];
+  [%expect {| (Tensor 7 Float) |}];
   print ~n:2;
-  [%expect {| (Tensor 2) |}];
+  [%expect {| (Tensor 2 Float) |}];
   print ~n:3;
-  [%expect {| (Tensor 0) |}];
+  [%expect {| (Tensor 0 Float) |}];
   print ~n:4;
-  [%expect {| (Tensor 0) |}]
+  [%expect {| (Tensor 0 Float) |}]
 ;;
 
 let%expect_test "pertubation confusion avoidance" =
@@ -289,7 +328,7 @@ let%expect_test "pertubation confusion avoidance" =
   Eval.handle ~f:(fun () -> derivative ~f ~x:(Value.of_float 0.))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor 0) |}]
+  [%expect {| (Tensor 0 Float) |}]
 ;;
 
 module Staging = struct
@@ -301,10 +340,10 @@ module Staging = struct
 
   let create () = { equations = []; name_counter = 0; vars = Expr.Var.Set.empty }
 
-  let fresh_var t ~dims =
+  let fresh_var t ~shape =
     let name = [%string "v_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
-    let var : Expr.Var.t = { name; dims } in
+    let var : Expr.Var.t = { name; shape } in
     t.vars <- Set.add t.vars var;
     var
   ;;
@@ -314,10 +353,11 @@ module Staging = struct
   let handle t ~f =
     try f () with
     | effect Fox_effect.Op op, k ->
-      let dims = Op.map op ~f:Value.dims |> Op.infer_dims_exn in
-      let binder = fresh_var t ~dims in
+      let shape = Op.map op ~f:Value.shape |> Op.infer_shape_exn in
+      let binder = fresh_var t ~shape in
       t.equations <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
-      continue k (T { value = binder; type_id = Expr.Var.type_id; dims })
+      let value : Value.t = T { value = binder; type_id = Expr.Var.type_id; shape } in
+      continue k value
   ;;
 end
 
@@ -334,7 +374,9 @@ let build_expr
   let staging = Staging.create () in
   let parameters =
     Value_tree.Def.flatten in_tree_def
-    |> List.map ~f:(fun dims -> Staging.fresh_var staging ~dims)
+    |> List.map ~f:(fun dims ->
+      (* TODO: support arbitrary types here. *)
+      Staging.fresh_var staging ~shape:{ dims; type_ = T Float })
   in
   let f, out_tree_def =
     flatten_function (module In) (module Out) ~f ~in_tree_def ~here:[%here]
@@ -346,7 +388,7 @@ let build_expr
         Value.T
           { value = parameter
           ; type_id = Expr.Var.type_id
-          ; dims = Expr.Var.dims parameter
+          ; shape = Expr.Var.shape parameter
           })
       |> f)
   in
@@ -367,9 +409,9 @@ let%expect_test "build_expr" =
   build_expr' ~f:foo ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = add v_0 (Tensor 3);
-    v_2[] = mul v_0 v_1;
+    v_0[]: float ->
+    v_1[]: float = add v_0 (Tensor 3 Float);
+    v_2[]: float = mul v_0 v_1;
     ( v_2 )
     |}]
 ;;
@@ -380,8 +422,8 @@ let%expect_test "build_expr2" =
   |> print_endline;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = mul (Tensor 2) (Tensor 2);
+    v_0[]: float ->
+    v_1[]: float = mul (Tensor 2 Float) (Tensor 2 Float);
     ( v_1 )
     |}]
 ;;
@@ -425,7 +467,7 @@ let%expect_test "eval_expr" =
     eval_expr' (build_expr' ~f:foo ~in_dims:[||]) (Value.of_float 2.))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor 10) |}]
+  [%expect {| (Tensor 10 Float) |}]
 ;;
 
 let%expect_test "jvp and eval_expr" =
@@ -436,7 +478,7 @@ let%expect_test "jvp and eval_expr" =
       ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
-  [%expect {| ((Tensor 10) (Tensor 7)) |}]
+  [%expect {| ((Tensor 10 Float) (Tensor 7 Float)) |}]
 ;;
 
 let%expect_test "nth_order_derivative build_expr" =
@@ -448,45 +490,45 @@ let%expect_test "nth_order_derivative build_expr" =
   print ~n:0;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = add v_0 (Tensor 3);
-    v_2[] = mul v_0 v_1;
+    v_0[]: float ->
+    v_1[]: float = add v_0 (Tensor 3 Float);
+    v_2[]: float = mul v_0 v_1;
     ( v_2 )
     |}];
   print ~n:1;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = add (Tensor 1) (Tensor 0);
-    v_2[] = add v_0 (Tensor 3);
-    v_3[] = mul v_0 v_1;
-    v_4[] = mul (Tensor 1) v_2;
-    v_5[] = add v_4 v_3;
-    v_6[] = mul v_0 v_2;
+    v_0[]: float ->
+    v_1[]: float = add (Tensor 1 Float) (Tensor 0 Float);
+    v_2[]: float = add v_0 (Tensor 3 Float);
+    v_3[]: float = mul v_0 v_1;
+    v_4[]: float = mul (Tensor 1 Float) v_2;
+    v_5[]: float = add v_4 v_3;
+    v_6[]: float = mul v_0 v_2;
     ( v_5 )
     |}];
   print ~n:2;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = add (Tensor 0) (Tensor 0);
-    v_2[] = add (Tensor 1) (Tensor 0);
-    v_3[] = add (Tensor 1) (Tensor 0);
-    v_4[] = add v_0 (Tensor 3);
-    v_5[] = mul v_0 v_1;
-    v_6[] = mul (Tensor 1) v_2;
-    v_7[] = add v_6 v_5;
-    v_8[] = mul v_0 v_2;
-    v_9[] = mul (Tensor 1) v_3;
-    v_10[] = mul (Tensor 0) v_4;
-    v_11[] = add v_10 v_9;
-    v_12[] = mul (Tensor 1) v_4;
-    v_13[] = add v_11 v_7;
-    v_14[] = add v_12 v_8;
-    v_15[] = mul v_0 v_3;
-    v_16[] = mul (Tensor 1) v_4;
-    v_17[] = add v_16 v_15;
-    v_18[] = mul v_0 v_4;
+    v_0[]: float ->
+    v_1[]: float = add (Tensor 0 Float) (Tensor 0 Float);
+    v_2[]: float = add (Tensor 1 Float) (Tensor 0 Float);
+    v_3[]: float = add (Tensor 1 Float) (Tensor 0 Float);
+    v_4[]: float = add v_0 (Tensor 3 Float);
+    v_5[]: float = mul v_0 v_1;
+    v_6[]: float = mul (Tensor 1 Float) v_2;
+    v_7[]: float = add v_6 v_5;
+    v_8[]: float = mul v_0 v_2;
+    v_9[]: float = mul (Tensor 1 Float) v_3;
+    v_10[]: float = mul (Tensor 0 Float) v_4;
+    v_11[]: float = add v_10 v_9;
+    v_12[]: float = mul (Tensor 1 Float) v_4;
+    v_13[]: float = add v_11 v_7;
+    v_14[]: float = add v_12 v_8;
+    v_15[]: float = mul v_0 v_3;
+    v_16[]: float = mul (Tensor 1 Float) v_4;
+    v_17[]: float = add v_16 v_15;
+    v_18[]: float = mul v_0 v_4;
     ( v_13 )
     |}]
 ;;
@@ -497,9 +539,9 @@ module Partial_value = struct
     | Unknown of Expr.Var.t
   [@@deriving sexp_of]
 
-  let dims = function
-    | Known value -> Value.dims value
-    | Unknown var -> Expr.Var.dims var
+  let shape = function
+    | Known value -> Value.shape value
+    | Unknown var -> Expr.Var.shape var
   ;;
 
   let to_atom t ~vars =
@@ -520,15 +562,18 @@ module Partial = struct
 
   let create () = { equations = []; name_counter = 0; vars = Expr.Var.Set.empty }
 
-  let fresh_var t ~dims =
+  let fresh_var t ~shape =
     let name = [%string "p_%{t.name_counter#Int}"] in
     t.name_counter <- t.name_counter + 1;
-    let var : Expr.Var.t = { name; dims } in
+    let var : Expr.Var.t = { name; shape } in
     t.vars <- Set.add t.vars var;
     var
   ;;
 
-  let lift (T { value = x; type_id; dims = _ } as value : Value.t) : Partial_value.t =
+  (* TODO: This sort of coersion should be a function in value.mli *)
+  let lift (T { value = x; type_id; shape = { dims = _; type_ = _ } } as value : Value.t)
+    : Partial_value.t
+    =
     match Type_equal.Id.same_witness type_id Partial_value.type_id with
     | Some T -> x
     | None -> Known value
@@ -550,10 +595,10 @@ module Partial = struct
         | Broadcast { value = Known a; dims } -> Known (Value.broadcast a ~dims)
         | Reshape { value = Known a; dims } -> Known (Value.reshape a ~dims)
         | ( Unary ((Neg | Sin | Cos | Sqrt | Exp | Log | Sigmoid), _)
-          | Binary ((Add | Sub | Mul | Div), _, _)
+          | Binary ((Add | Sub | Mul | Div | Eq | Gt | Lt), _, _)
           | Matmul _ | Transpose _ | Sum _ | Broadcast _ | Reshape _ ) as op ->
-          let dims = Op.map op ~f:Partial_value.dims |> Op.infer_dims_exn in
-          let binder = fresh_var t ~dims in
+          let shape = Op.map op ~f:Partial_value.shape |> Op.infer_shape_exn in
+          let binder = fresh_var t ~shape in
           t.equations
           <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
           Unknown binder
@@ -563,7 +608,7 @@ module Partial = struct
         (T
            { value = result
            ; type_id = Partial_value.type_id
-           ; dims = Partial_value.dims result
+           ; shape = Partial_value.shape result
            })
   ;;
 end
@@ -584,7 +629,7 @@ let partially_apply_expr_flat
         Value.T
           { value = input
           ; type_id = Partial_value.type_id
-          ; dims = Partial_value.dims input
+          ; shape = Partial_value.shape input
           })
       |> f)
   in
@@ -615,7 +660,9 @@ let%expect_test "partially_apply_expr_flat" =
   let partial_values, expr =
     Eval.handle ~f:(fun () ->
       partially_apply_expr_flat
-        [ Known (Value.of_float 2.); Unknown { name = "x"; dims = [||] } ]
+        [ Known (Value.of_float 2.)
+        ; Unknown { name = "x"; shape = { dims = [||]; type_ = T Float } }
+        ]
         ~f:(function
           | [ x; y ] ->
             let x2 = Value.O.(x * x) in
@@ -626,17 +673,19 @@ let%expect_test "partially_apply_expr_flat" =
   print_s ([%sexp_of: Partial_value.t list] partial_values);
   [%expect
     {|
-    ((Known (Tensor 4)) (Unknown ((name p_3) (dims ()))) (Known (Tensor 2))
-     (Unknown ((name p_1) (dims ()))))
+    ((Known (Tensor 4 Float))
+     (Unknown ((name p_3) (shape ((dims ()) (type_ Float)))))
+     (Known (Tensor 2 Float))
+     (Unknown ((name p_1) (shape ((dims ()) (type_ Float))))))
     |}];
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
-    x[] ->
-    p_0[] = mul x x;
-    p_1[] = add p_0 (Tensor 4);
-    p_2[] = mul (Tensor 4) x;
-    p_3[] = add p_2 (Tensor 3);
+    x[]: float ->
+    p_0[]: float = mul x x;
+    p_1[]: float = add p_0 (Tensor 4 Float);
+    p_2[]: float = mul (Tensor 4 Float) x;
+    p_3[]: float = add p_2 (Tensor 3 Float);
     ( p_3, p_1 )
     |}]
 ;;
@@ -660,7 +709,7 @@ let linearize
       primals
       (List.mapi primals ~f:(fun i primal ->
          Partial_value.Unknown
-           { name = [%string "a_%{i#Int}"]; dims = Partial_value.dims primal }))
+           { name = [%string "a_%{i#Int}"]; shape = Partial_value.shape primal }))
   in
   let outputs, expr =
     partially_apply_expr_flat inputs ~f:(fun inputs ->
@@ -712,11 +761,15 @@ let%expect_test "linearize" =
     Eval.handle ~f:(fun () -> linearize' ~f:Value.sin ~primals:(Value.of_float 3.))
   in
   print_s [%message "" (y : Value.t) (Float.sin 3. : float)];
-  [%expect {| ((y (Tensor 0.14112000805986721)) ("Float.sin 3." 0.14112000805986721)) |}];
+  [%expect
+    {| ((y (Tensor 0.14112000805986721 Float)) ("Float.sin 3." 0.14112000805986721)) |}];
   let y' = Eval.handle ~f:(fun () -> f_lin (Value.of_float 1.)) in
   print_s [%message "" (y' : Value.t) (Float.cos 3. : float)];
   [%expect
-    {| ((y' (Tensor -0.98999249660044542)) ("Float.cos 3." -0.98999249660044542)) |}];
+    {|
+    ((y' (Tensor -0.98999249660044542 Float))
+     ("Float.cos 3." -0.98999249660044542))
+    |}];
   let y, f_lin =
     Eval.handle ~f:(fun () ->
       linearize'
@@ -727,7 +780,11 @@ let%expect_test "linearize" =
   in
   let y' = Eval.handle ~f:(fun () -> f_lin (Value.of_float 1.)) in
   print_s [%message "" (y : Value.t) (y' : Value.t)];
-  [%expect {| ((y (Tensor 2.7177599838802657)) (y' (Tensor 2.9799849932008908))) |}];
+  [%expect
+    {|
+    ((y (Tensor 2.7177599838802657 Float))
+     (y' (Tensor 2.9799849932008908 Float)))
+    |}];
   let f a =
     let b = Value.sin a in
     let c = Value.neg b in
@@ -736,9 +793,9 @@ let%expect_test "linearize" =
   build_expr' ~f ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = sin v_0;
-    v_2[] = neg v_1;
+    v_0[]: float ->
+    v_1[]: float = sin v_0;
+    v_2[]: float = neg v_1;
     ( v_2 )
     |}];
   build_expr
@@ -750,12 +807,12 @@ let%expect_test "linearize" =
   |> print_endline;
   [%expect
     {|
-    v_0[] v_1[] ->
-    v_2[] = cos v_0;
-    v_3[] = mul v_2 v_1;
-    v_4[] = sin v_0;
-    v_5[] = neg v_3;
-    v_6[] = neg v_4;
+    v_0[]: float v_1[]: float ->
+    v_2[]: float = cos v_0;
+    v_3[]: float = mul v_2 v_1;
+    v_4[]: float = sin v_0;
+    v_5[]: float = neg v_3;
+    v_6[]: float = neg v_4;
     ( v_6, v_5 )
     |}];
   (* TODO: fix consts? *)
@@ -768,19 +825,19 @@ let%expect_test "linearize" =
   |> print_endline;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = cos v_0;
-    v_2[] = sin v_0;
-    v_3[] = neg v_2;
+    v_0[]: float ->
+    v_1[]: float = cos v_0;
+    v_2[]: float = sin v_0;
+    v_3[]: float = neg v_2;
     ( v_3 )
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
   [%expect
     {|
-    v_0[] ->
-    v_1[] = mul (Tensor 1) v_0;
-    v_2[] = neg v_1;
+    v_0[]: float ->
+    v_1[]: float = mul (Tensor 1 Float) v_0;
+    v_2[]: float = neg v_1;
     ( v_2 )
     |}]
 ;;
@@ -838,17 +895,17 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
           accum_gradient ~ct_env var (Value.matmul (Value.transpose v) cotangent)
         | Transpose (Var var) -> accum_gradient ~ct_env var (Value.transpose cotangent)
         | Sum { value = Var var; dims; keep_dims } ->
-          let var_dims = Expr.Var.dims var in
+          let var_shape = Expr.Var.shape var in
           (match keep_dims with
            | true -> cotangent
            | false ->
              (* When dims aren't kept, there are situations where broadcasting to the input
                 dimension doesn't work e.g. a sum s.t. [ 2; 3 ] -> [ 2 ] *)
-             let dims_if_dims_were_kept =
-               Op.infer_dims_exn (Op.Sum { value = var_dims; dims; keep_dims = true })
+             let shape_if_dims_were_kept =
+               Op.infer_shape_exn (Op.Sum { value = var_shape; dims; keep_dims = true })
              in
-             Value.reshape cotangent ~dims:dims_if_dims_were_kept)
-          |> Value.broadcast ~dims:var_dims
+             Value.reshape cotangent ~dims:(Shape.dims shape_if_dims_were_kept))
+          |> Value.broadcast ~dims:(Shape.dims var_shape)
           |> accum_gradient ~ct_env var
         | Broadcast { value = Var var; dims = to_dims } ->
           let from_dims = Expr.Var.dims var in
@@ -879,7 +936,7 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
         | Reshape { value = Var var; dims = _ } ->
           Value.reshape cotangent ~dims:(Expr.Var.dims var) |> accum_gradient ~ct_env var
         | Unary ((Neg | Sin | Cos | Sqrt | Exp | Log | Sigmoid), _)
-        | Binary ((Add | Sub | Mul | Div), _, _)
+        | Binary ((Add | Sub | Mul | Div | Eq | Gt | Lt), _, _)
         | Matmul _ | Transpose _ | Sum _ | Broadcast _ | Reshape _ ->
           raise_s
             [%message
@@ -908,7 +965,7 @@ let vjp
   let primals_length = List.length primals in
   let tangent_vars =
     List.mapi primals ~f:(fun i primal ->
-      { Expr.Var.name = [%string "a_%{i#Int}"]; dims = Partial_value.dims primal })
+      { Expr.Var.name = [%string "a_%{i#Int}"]; shape = Partial_value.shape primal })
   in
   let inputs =
     List.append primals (List.map tangent_vars ~f:(fun var -> Partial_value.Unknown var))
@@ -995,11 +1052,15 @@ let%expect_test "grad" =
   in
   let y' = Eval.handle ~f:(fun () -> f_vjp (Value.of_float 1.)) in
   print_s [%message "" (y : Value.t) (y' : Value.t)];
-  [%expect {| ((y (Tensor 0.14112000805986721)) (y' (Tensor -0.98999249660044542))) |}];
+  [%expect
+    {|
+    ((y (Tensor 0.14112000805986721 Float))
+     (y' (Tensor -0.98999249660044542 Float)))
+    |}];
   Eval.handle ~f:(fun () -> grad' ~f:(fun x -> Value.O.(x * x)) ~x:(Value.of_float 3.))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor 6) |}];
+  [%expect {| (Tensor 6 Float) |}];
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(fun x ->
@@ -1008,14 +1069,14 @@ let%expect_test "grad" =
       ~x:(Value.of_float 3.))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor 2.9799849932008908) |}];
+  [%expect {| (Tensor 2.9799849932008908 Float) |}];
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(Value.sum ~keep_dims:false)
       ~x:(Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ])))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor ((1 1) (1 1)) (dims (2 2))) |}];
+  [%expect {| (Tensor ((1 1) (1 1)) (dims (2 2)) (type_ Float)) |}];
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(fun x ->
@@ -1023,5 +1084,5 @@ let%expect_test "grad" =
       ~x:(Value.of_typed_tensor (Tensor.Typed.arange 4)))
   |> [%sexp_of: Value.t]
   |> print_s;
-  [%expect {| (Tensor (1 1 1 1) (dims (4))) |}]
+  [%expect {| (Tensor (1 1 1 1) (dims (4)) (type_ Float)) |}]
 ;;
