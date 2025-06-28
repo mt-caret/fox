@@ -12,6 +12,8 @@ type t = Value0.t =
 val dims : t -> int array
 val type_ : t -> Type.Packed.t
 val shape : t -> Shape.t
+val coerce : t -> type_id:'a Type_equal.Id.t -> 'a option
+val coerce_exn : t -> type_id:'a Type_equal.Id.t -> 'a
 val tree_def : dims:int array -> Value_tree.Def.t
 val of_typed_tensor : 'a Tensor.Typed.t -> t
 val of_tensor : Tensor.t -> t

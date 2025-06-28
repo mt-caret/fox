@@ -20,29 +20,14 @@ let of_typed_tensor (type a) (tensor : a Tensor.Typed.t) =
 
 let of_tensor (Tensor.T tensor) = of_typed_tensor tensor
 
-let to_typed_tensor_exn
-      (type a)
-      (type_ : a Type.t)
-      (T { value; type_id; shape = { dims = _; type_ = _ } } as t)
-  : a Tensor.Typed.t
-  =
-  match
-    Type_equal.Id.same_witness
-      type_id
-      (Type.type_equal_id type_ |> Tensor.Typed.type_equal_id)
-  with
-  | Some T -> value
-  | None -> raise_s [%message "Invalid value" (t : t)]
+let to_typed_tensor_exn type_ t =
+  coerce_exn t ~type_id:(Type.type_equal_id type_ |> Tensor.Typed.type_equal_id)
 ;;
 
-let to_tensor_exn (T { value; type_id; shape = { dims = _; type_ = T type_ } } as t) =
-  match
-    Type_equal.Id.same_witness
-      type_id
-      (Type.type_equal_id type_ |> Tensor.Typed.type_equal_id)
-  with
-  | Some T -> Tensor.T value
-  | None -> raise_s [%message "Invalid value" (t : t)]
+let to_tensor_exn t =
+  let (T type_) = shape t |> Shape.type_ in
+  Tensor.T
+    (coerce_exn t ~type_id:(Type.type_equal_id type_ |> Tensor.Typed.type_equal_id))
 ;;
 
 let of_float x = of_typed_tensor (Tensor.Typed.of_lit Float x)

@@ -12,3 +12,5 @@ type t =
 val dims : t -> int array
 val type_ : t -> Type.Packed.t
 val shape : t -> Shape.t
+val coerce : t -> type_id:'a Type_equal.Id.t -> 'a option
+val coerce_exn : t -> type_id:'a Type_equal.Id.t -> 'a

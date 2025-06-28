@@ -77,12 +77,12 @@ module Jvp = struct
     { primal; tangent; id = t.id }
   ;;
 
-  let lift t (T { value = x; type_id; shape = { dims; type_ } } as value : Value.t)
+  let lift t (T { value = _; type_id = _; shape = { dims; type_ } } as value : Value.t)
     : Dual_number.t
     =
     let zeros () = Value.of_typed_tensor (Tensor.Typed.create Float ~dims 0.) in
-    match Type_equal.Id.same_witness type_id Dual_number.type_id with
-    | Some T ->
+    match Value.coerce value ~type_id:Dual_number.type_id with
+    | Some x ->
       if Id.equal t.id x.id
       then x
       else dual_number t ~primal:value ~tangent:(Some (zeros ()))
@@ -570,13 +570,9 @@ module Partial = struct
     var
   ;;
 
-  (* TODO: This sort of coersion should be a function in value.mli *)
-  let lift (T { value = x; type_id; shape = { dims = _; type_ = _ } } as value : Value.t)
-    : Partial_value.t
-    =
-    match Type_equal.Id.same_witness type_id Partial_value.type_id with
-    | Some T -> x
-    | None -> Known value
+  let lift value =
+    Value.coerce value ~type_id:Partial_value.type_id
+    |> Option.value ~default:(Known value)
   ;;
 
   let value_to_atom t value = Partial_value.to_atom value ~vars:t.vars
