@@ -1,0 +1,13 @@
+; XLA's C++ runtime logs to stdout/stderr the first time it initialises a CPU
+; client, which pollutes inline-test output non-deterministically. Silence
+; everything below ERROR so expect-test output is stable.
+;
+; oneDNN reorders floating-point reductions per host CPU, which perturbs the low
+; bits of XLA results and makes exact expect tests machine-dependent. Disable it
+; so numeric outputs are reproducible across machines (e.g. local vs CI).
+
+(env
+ (_
+  (env-vars
+   (TF_CPP_MIN_LOG_LEVEL 2)
+   (TF_ENABLE_ONEDNN_OPTS 0))))

@@ -18,9 +18,9 @@ let tensor_to_xla_literal tensor =
 ;;
 
 let xla_subcomp
-      ({ parameters; equations; return_vals; out_tree_def = _ } : Expr.t)
-      arguments
-      ~builder
+  ({ parameters; equations; return_vals; out_tree_def = _ } : Expr.t)
+  arguments
+  ~builder
   =
   let env = List.zip_exn parameters arguments |> Expr.Var.Map.of_alist_exn in
   let read_atom (atom : Expr.Atom.t) ~env =
@@ -148,19 +148,18 @@ let xla_callable ?(print_hlo = false) (expr : Expr.t) =
     |> Nonempty_list.map ~f:(fun (literal, shape) -> tensor_of_xla_literal literal ~shape))
 ;;
 
-(* TODO: One crucial difference between the implementation here and autodidax is
-   that the compilation is not cached. One approach would be to have
-   [jit] take an [in_tree_def] argument, and return a staged function of type
-   [in_ -> out] (with some validation that the tree def matches up, or
-   alternatively recompile if it doesn't?).
+(* TODO: One crucial difference between the implementation here and autodidax is that the
+   compilation is not cached. One approach would be to have [jit] take an [in_tree_def]
+   argument, and return a staged function of type [in_ -> out] (with some validation that
+   the tree def matches up, or alternatively recompile if it doesn't?).
 *)
 let jit
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      ?print_hlo
-      ~f
-      (input : in_)
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  ?print_hlo
+  ~f
+  (input : in_)
   : out
   =
   let input_tree = In.tree_of_t input in

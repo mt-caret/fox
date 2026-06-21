@@ -1,4 +1,4 @@
-(** An opaque unique identifier.*)
+(** An opaque unique identifier. *)
 
 open! Core
 

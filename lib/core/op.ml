@@ -260,9 +260,8 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
       let padded_from_dims =
         Array.append (Array.create ~len:dims_padding_length 1) from_dims
       in
-      if
-        Array.zip_exn padded_from_dims to_dims
-        |> Array.for_all ~f:(fun (from, to_) -> to_ = from || from = 1)
+      if Array.zip_exn padded_from_dims to_dims
+         |> Array.for_all ~f:(fun (from, to_) -> to_ = from || from = 1)
       then Ok ()
       else Or_error.error_s [%message "infer_dims: can't broadcast" ~op:(t : Shape.t t)]
     in
@@ -307,8 +306,7 @@ module Make_operators (M : sig
     val eval : t op -> t
     val shape : t -> Shape.t
   end) : Operators_intf.S with type t := M.t = struct
-  let eval =
-    fun t ->
+  let eval t =
     let inferred_out_shape = map t ~f:M.shape |> infer_shape_exn in
     let out = M.eval t in
     [%test_result: Shape.t]

@@ -20,8 +20,8 @@ module Typed : sig
   val of_lit : 'a Type.t -> 'a -> 'a t
   val of_list : 'a Type.t -> 'a list -> 'a t
 
-  (** [of_list2_exn l] creates a tensor from a list of rows. Raises if a
-    non-rectangular list of lists are provided. *)
+  (** [of_list2_exn l] creates a tensor from a list of rows. Raises if a non-rectangular
+      list of lists are provided. *)
   val of_list2_exn : 'a Type.t -> 'a list list -> 'a t
 
   val create : 'a Type.t -> dims:int array -> 'a -> 'a t

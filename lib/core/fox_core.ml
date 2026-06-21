@@ -11,40 +11,45 @@ module Value = Value
 module Value_tree = Value_tree
 
 let flatten_function
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      ~(f : in_ -> out)
-      ~in_tree_def
-      ~here
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  ~(f : in_ -> out)
+  ~in_tree_def
+  ~here
   =
   let out_tree_def = Set_once.create () in
   ( Staged.stage (fun values ->
       let in_tree = Value_tree.unflatten values ~def:in_tree_def in
       let out = f (In.t_of_tree in_tree) in
       let out_tree = Out.tree_of_t out in
-      Set_once.set_exn out_tree_def here (Value_tree.to_def out_tree);
+      Set_once.set_exn out_tree_def ~here (Value_tree.to_def out_tree);
       Value_tree.flatten out_tree)
   , out_tree_def )
 ;;
 
+(* [Fox_effect.Op] is the only effect performed, so a single shared deep handler suffices.
+   [handle] maps the performed op to the value to resume the computation with. *)
+let handle_op ~f ~(handle : Value0.t Op.t -> Value0.t) =
+  let effc : type a. a Effect.t -> ((a, _) continuation -> _) option =
+    fun eff ->
+    match eff with
+    | Fox_effect.Op op -> Some (fun k -> continue k (handle op))
+    | _ -> None
+  in
+  Effect.Deep.try_with f () { effc }
+;;
+
 module Eval = struct
   let handle ~f =
-    try f () with
-    | effect Fox_effect.Op op, k ->
-      let result =
-        Op.map op ~f:Value.to_tensor_exn
-        |> Op.eval (module Tensor : Operators_intf.S with type t = Tensor.t)
-        |> Value.of_tensor
-      in
-      continue k result
+    handle_op ~f ~handle:(fun op ->
+      Op.map op ~f:Value.to_tensor_exn
+      |> Op.eval (module Tensor : Operators_intf.S with type t = Tensor.t)
+      |> Value.of_tensor)
   ;;
 end
 
-(* foo(x) = x(x + 3) = x^2 + 3x
-   foo'(x) = 2x + 3
-   foo''(x) = 2
-   foo'''(x) = 0
+(* foo(x) = x(x + 3) = x^2 + 3x foo'(x) = 2x + 3 foo''(x) = 2 foo'''(x) = 0
 *)
 let foo x = Value.O.(x * (x + Value.of_float 3.))
 
@@ -93,8 +98,7 @@ module Jvp = struct
   ;;
 
   let handle t ~f =
-    try f () with
-    | effect Fox_effect.Op op, k ->
+    handle_op ~f ~handle:(fun op ->
       let result =
         match Op.map op ~f:(lift t) with
         | Unary (Neg, a) ->
@@ -211,17 +215,17 @@ module Jvp = struct
             ~primal:(Value.reshape value.primal ~dims)
             ~tangent:(Option.map value.tangent ~f:(Value.reshape ~dims))
       in
-      continue k (Dual_number.to_value result)
+      Dual_number.to_value result)
   ;;
 end
 
 let jvp
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      ~f
-      ~(primals : in_)
-      ~(tangents : in_)
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  ~f
+  ~(primals : in_)
+  ~(tangents : in_)
   =
   let jvp = Jvp.create () in
   let primals_tree, tangents_tree = In.tree_of_t primals, In.tree_of_t tangents in
@@ -250,7 +254,7 @@ let jvp
       primal, Option.value_exn ~message:"None tangent not supported in jvp" tangent)
     |> List.unzip
   in
-  let out_tree_def = Set_once.get_exn out_tree_def [%here] in
+  let out_tree_def = Set_once.get_exn out_tree_def in
   ( Out.t_of_tree (Value_tree.unflatten primals ~def:out_tree_def)
   , Out.t_of_tree (Value_tree.unflatten tangents ~def:out_tree_def) )
 ;;
@@ -351,24 +355,23 @@ module Staging = struct
   let value_to_atom t value = Expr.Atom.of_value ~vars:t.vars value
 
   let handle t ~f =
-    try f () with
-    | effect Fox_effect.Op op, k ->
+    handle_op ~f ~handle:(fun op ->
       let shape = Op.map op ~f:Value.shape |> Op.infer_shape_exn in
       let binder = fresh_var t ~shape in
       t.equations <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
       let value : Value.t = T { value = binder; type_id = Expr.Var.type_id; shape } in
-      continue k value
+      value)
   ;;
 end
 
-(* TODO: could [Expr.t] instead be something like [(in_, out) Expr.t], storing
-   the modules internally? *)
+(* TODO: could [Expr.t] instead be something like [(in_, out) Expr.t], storing the modules
+   internally? *)
 let build_expr
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      ~f
-      ~in_tree_def
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  ~f
+  ~in_tree_def
   : Expr.t
   =
   let staging = Staging.create () in
@@ -398,7 +401,7 @@ let build_expr
     ~return_vals:
       (Nonempty_list.of_list_exn result
        |> Nonempty_list.map ~f:(Staging.value_to_atom staging))
-    ~out_tree_def:(Set_once.get_exn out_tree_def [%here])
+    ~out_tree_def:(Set_once.get_exn out_tree_def)
 ;;
 
 let build_expr' ~f ~in_dims : Expr.t =
@@ -446,11 +449,11 @@ let eval_expr_flat (expr : Expr.t) (input : Value.t list) =
 ;;
 
 let eval_expr
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      (expr : Expr.t)
-      (input : in_)
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  (expr : Expr.t)
+  (input : in_)
   : out
   =
   In.tree_of_t input
@@ -578,8 +581,7 @@ module Partial = struct
   let value_to_atom t value = Partial_value.to_atom value ~vars:t.vars
 
   let handle t ~f =
-    try f () with
-    | effect Fox_effect.Op op, k ->
+    handle_op ~f ~handle:(fun op ->
       let result : Partial_value.t =
         match Op.map op ~f:lift with
         | Unary (kind, Known a) -> Known (Op.eval (module Value) (Unary (kind, a)))
@@ -599,23 +601,21 @@ module Partial = struct
           <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
           Unknown binder
       in
-      continue
-        k
-        (T
-           { value = result
-           ; type_id = Partial_value.type_id
-           ; shape = Partial_value.shape result
-           })
+      T
+        { value = result
+        ; type_id = Partial_value.type_id
+        ; shape = Partial_value.shape result
+        })
   ;;
 end
 
-(** Do we need the const argument to prevent constants from being instantiated many many times?
+(** Do we need the const argument to prevent constants from being instantiated many many
+    times?
 
-    arguably we could just have an eq in the jaxpr for the constant
-*)
+    arguably we could just have an eq in the jaxpr for the constant *)
 let partially_apply_expr_flat
-      (inputs : Partial_value.t list)
-      ~(f : Value.t list -> Value.t list * Value_tree.Def.t)
+  (inputs : Partial_value.t list)
+  ~(f : Value.t list -> Value.t list * Value_tree.Def.t)
   : Partial_value.t list * Expr.t
   =
   let partial = Partial.create () in
@@ -687,11 +687,11 @@ let%expect_test "partially_apply_expr_flat" =
 ;;
 
 let linearize
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      ~(f : in_ -> out)
-      ~(primals : in_)
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  ~(f : in_ -> out)
+  ~(primals : in_)
   =
   let primals_tree = In.tree_of_t primals in
   let primals_tree_def = Value_tree.to_def primals_tree in
@@ -895,8 +895,8 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
           (match keep_dims with
            | true -> cotangent
            | false ->
-             (* When dims aren't kept, there are situations where broadcasting to the input
-                dimension doesn't work e.g. a sum s.t. [ 2; 3 ] -> [ 2 ] *)
+             (* When dims aren't kept, there are situations where broadcasting to the
+                input dimension doesn't work e.g. a sum s.t. [ 2; 3 ] -> [ 2 ] *)
              let shape_if_dims_were_kept =
                Op.infer_shape_exn (Op.Sum { value = var_shape; dims; keep_dims = true })
              in
@@ -946,11 +946,11 @@ let eval_expr_transposed (expr : Expr.t) args ~cotangents =
 ;;
 
 let vjp
-      (type in_ out)
-      (module In : Treeable_intf.S with type t = in_)
-      (module Out : Treeable_intf.S with type t = out)
-      ~(f : in_ -> out)
-      ~(primals : in_)
+  (type in_ out)
+  (module In : Treeable_intf.S with type t = in_)
+  (module Out : Treeable_intf.S with type t = out)
+  ~(f : in_ -> out)
+  ~(primals : in_)
   =
   let primals_tree = In.tree_of_t primals in
   let primals_tree_def = Value_tree.to_def primals_tree in
@@ -1024,10 +1024,10 @@ let vjp
 let vjp' ~f ~primal = vjp (module Value) (module Value) ~f ~primals:primal
 
 let grad_and_value
-      (type in_)
-      (module In : Treeable_intf.S with type t = in_)
-      ~(f : in_ -> Value.t)
-      ~x
+  (type in_)
+  (module In : Treeable_intf.S with type t = in_)
+  ~(f : in_ -> Value.t)
+  ~x
   =
   let y, f_vjp = vjp (module In) (module Value) ~f ~primals:x in
   y, f_vjp (Value.of_float 1.)

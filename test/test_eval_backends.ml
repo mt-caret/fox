@@ -354,8 +354,7 @@ let%expect_test "grad+jit vs grad+eval" =
   test
     ~f:(fun value -> grad' ~f:(fun value -> Value.O.(value * value)) ~x:value)
     ~x:(Value.of_float 1.);
-  [%expect
-    {|
+  [%expect {|
     (Tensor 2 Float)
     (Tensor 2 Float)
     |}];
@@ -382,9 +381,9 @@ let%expect_test "eval grad expr vs xla" =
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
   Quickcheck.test
     (fun_generator ~op_nums:1)
-    (* TODO: without a periodic [Gc.full_major ()], pthread_create fails with EAGAIN
-       and causes a SIGABRT (at least on macos) when ~trials is set to more than 300.
-       This is likely a result of not properly releasing resources somewhere. *)
+    (* TODO: without a periodic [Gc.full_major ()], pthread_create fails with EAGAIN and
+       causes a SIGABRT (at least on macos) when ~trials is set to more than 300. This is
+       likely a result of not properly releasing resources somewhere. *)
     ~trials:200
     ~sexp_of:(fun (tensor, expr) ->
       [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
@@ -398,8 +397,8 @@ let%expect_test "eval grad expr vs xla" =
             | T Float -> Value.sum expr_result
             | T Bool ->
               (* TODO: somehow prevent return type from being a boolean? *)
-              (* We can't really differentiate bool tensors, so we just sum the
-                input instead. *)
+              (* We can't really differentiate bool tensors, so we just sum the input
+                 instead. *)
               Value.sum value)
           ~x:value
       in

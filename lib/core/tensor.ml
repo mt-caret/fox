@@ -130,8 +130,8 @@ module Typed = struct
     T { bigarray = Bigarray.reshape bigarray dims; mapping }
   ;;
 
-  (* TODO: it's a bit sad that we duplicate this checking logic with
-   [Op.infer_dims]; is there a way to reduce the duplication here...? *)
+  (* TODO: it's a bit sad that we duplicate this checking logic with [Op.infer_dims]; is
+     there a way to reduce the duplication here...? *)
   let reshape t ~dims =
     match Array.count dims ~f:(fun dim -> dim = -1) with
     | 0 -> reshape' t ~dims
@@ -159,8 +159,8 @@ module Typed = struct
   ;;
 
   (* TODO: write a ppx that allows writing [5t] or [5.5t] which expands to
-   [Tensor.of_float (Int.to_float 5)] and [Tensor.of_float 5.5]. See
-   janestreet/ppx_fixed_literal for prior art. *)
+     [Tensor.of_float (Int.to_float 5)] and [Tensor.of_float 5.5]. See
+     janestreet/ppx_fixed_literal for prior art. *)
   let of_lit (type a) (type_ : a Type.t) f =
     let t = create_uninitialized type_ [||] in
     set t [||] f;
@@ -585,7 +585,7 @@ let%expect_test "normal" =
   let mean = mean t |> item_exn Float in
   let std = std t |> item_exn Float in
   print_s [%message "" (mean : float) (std : float)];
-  [%expect {| ((mean 0.0026463860836857677) (std 0.98795664491502377)) |}]
+  [%expect {| ((mean 0.0026463860836857694) (std 0.98795664491502377)) |}]
 ;;
 
 module With_shape = struct

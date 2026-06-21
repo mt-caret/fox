@@ -64,7 +64,7 @@ module Model = struct
       }
     [@@deriving typed_fields, sexp_of]
 
-    let field_treeable (type a) (field : a Typed_field.t)
+    let field_treeable (type a) (local_ (field : a Typed_field.t))
       : (a -> Value_tree.t) * (module Treeable.S with type t = a)
       =
       match field with

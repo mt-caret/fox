@@ -1,7 +1,6 @@
 open! Core
 
-(* TODO: switch to use iarrays once they land: 
-  https://github.com/ocaml/ocaml/pull/13097 *)
+(* TODO: switch to use iarrays once they land: https://github.com/ocaml/ocaml/pull/13097 *)
 type t =
   | T :
       { value : 'a
@@ -15,9 +14,9 @@ let type_ (T { value = _; type_id = _; shape = { dims = _; type_ } }) = type_
 let shape (T { value = _; type_id = _; shape }) = shape
 
 let coerce
-      (type a)
-      (T { value; type_id = type_id'; shape = _ })
-      ~(type_id : a Type_equal.Id.t)
+  (type a)
+  (T { value; type_id = type_id'; shape = _ })
+  ~(type_id : a Type_equal.Id.t)
   : a option
   =
   match Type_equal.Id.same_witness type_id type_id' with
@@ -26,9 +25,9 @@ let coerce
 ;;
 
 let coerce_exn
-      (type a)
-      (T { value; type_id = type_id'; shape = _ })
-      ~(type_id : a Type_equal.Id.t)
+  (type a)
+  (T { value; type_id = type_id'; shape = _ })
+  ~(type_id : a Type_equal.Id.t)
   : a
   =
   let T = Type_equal.Id.same_witness_exn type_id type_id' in
@@ -45,5 +44,5 @@ let sexp_of_t (T { value; type_id; shape = { dims; type_ } }) =
       (Type_equal.Id.name type_id)
         ~_:(x : Sexp.t)
         (dims : int array)
-        ~(type_ : Type.Packed.t)]
+        ~type_:(type_ : Type.Packed.t)]
 ;;
