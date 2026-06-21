@@ -18,11 +18,16 @@ let tensor_to_xla_literal tensor =
 ;;
 
 let xla_subcomp
-  ({ parameters; equations; return_vals; out_tree_def = _ } : Expr.t)
+  ({ parameters; consts = _; equations; return_vals; out_tree_def = _ } : Value.t Expr.t)
   arguments
+  ~const_ops
   ~builder
   =
-  let env = List.zip_exn parameters arguments |> Expr.Var.Map.of_alist_exn in
+  let env =
+    List.zip_exn parameters arguments
+    |> Expr.Var.Map.of_alist_exn
+    |> Map.merge_disjoint_exn const_ops
+  in
   let read_atom (atom : Expr.Atom.t) ~env =
     match atom with
     | Var var -> Map.find_exn env var
@@ -105,7 +110,7 @@ let xla_subcomp
 
 let xla_builder = lazy (Xla.Builder.create ~name:"xla_call")
 
-let xla_callable ?(print_hlo = false) (expr : Expr.t) =
+let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
   let xla_builder = Lazy.force xla_builder in
   let xla_params =
     List.mapi expr.parameters ~f:(fun i { name; shape = { dims; type_ } as shape } ->
@@ -121,7 +126,14 @@ let xla_callable ?(print_hlo = false) (expr : Expr.t) =
           ~builder:xla_builder
       , shape ))
   in
-  let out, out_shapes = xla_subcomp expr xla_params ~builder:xla_builder in
+  (* Hoisted constants are materialised once, up front, as XLA constant ops. *)
+  let const_ops =
+    Map.map expr.consts ~f:(fun value ->
+      let tensor = Value.to_typed_tensor_exn Float value in
+      let op = tensor_to_xla_literal tensor |> Xla.Op.constant ~builder:xla_builder in
+      op, Tensor.Typed.shape tensor)
+  in
+  let out, out_shapes = xla_subcomp expr xla_params ~const_ops ~builder:xla_builder in
   let xla_client = Xla.Client.cpu () in
   let xla_device = Xla.Client.addressable_devices xla_client |> List.hd_exn in
   let computation = Xla.Computation.build ~root:out in

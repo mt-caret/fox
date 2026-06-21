@@ -67,7 +67,7 @@ module Dual_number = struct
   [@@deriving sexp_of, fields ~getters]
 
   let type_id = Type_equal.Id.create ~name:"Dual_number" [%sexp_of: t]
-  let to_value t : Value.t = T { value = t; type_id; shape = Value.shape t.primal }
+  let to_value t : Value.t = Value.create ~value:t ~type_id ~shape:(Value.shape t.primal)
 end
 
 module Jvp = struct
@@ -82,7 +82,9 @@ module Jvp = struct
     { primal; tangent; id = t.id }
   ;;
 
-  let lift t (T { value = _; type_id = _; shape = { dims; type_ } } as value : Value.t)
+  let lift
+    t
+    (T { value = _; type_id = _; shape = { dims; type_ }; id = _ } as value : Value.t)
     : Dual_number.t
     =
     let zeros () = Value.of_typed_tensor (Tensor.Typed.create Float ~dims 0.) in
@@ -338,29 +340,50 @@ let%expect_test "pertubation confusion avoidance" =
 module Staging = struct
   type t =
     { mutable equations : Expr.Eq.t list
-    ; mutable name_counter : int
+    ; mutable var_name_counter : int
+    ; mutable const_name_counter : int
     ; mutable vars : Expr.Var.Set.t
+    ; mutable consts : Expr.Var.t Value.On_id.Map.t
     }
 
-  let create () = { equations = []; name_counter = 0; vars = Expr.Var.Set.empty }
+  let create () =
+    { equations = []
+    ; var_name_counter = 0
+    ; const_name_counter = 0
+    ; vars = Expr.Var.Set.empty
+    ; consts = Value.On_id.Map.empty
+    }
+  ;;
 
   let fresh_var t ~shape =
-    let name = [%string "v_%{t.name_counter#Int}"] in
-    t.name_counter <- t.name_counter + 1;
+    let name = [%string "v_%{t.var_name_counter#Int}"] in
+    t.var_name_counter <- t.var_name_counter + 1;
     let var : Expr.Var.t = { name; shape } in
     t.vars <- Set.add t.vars var;
     var
   ;;
 
-  let value_to_atom t value = Expr.Atom.of_value ~vars:t.vars value
+  let intern_value t value : Expr.Atom.t =
+    match Expr.Atom.of_value ~vars:t.vars value with
+    | Var var -> Var var
+    | Value value ->
+      (match Map.find t.consts value with
+       | Some const -> Var const
+       | None ->
+         let name = [%string "c_%{t.const_name_counter#Int}"] in
+         t.const_name_counter <- t.const_name_counter + 1;
+         let const : Expr.Var.t = { name; shape = Value.shape value } in
+         t.consts <- Map.add_exn t.consts ~key:value ~data:const;
+         t.vars <- Set.add t.vars const;
+         Var const)
+  ;;
 
   let handle t ~f =
     handle_op ~f ~handle:(fun op ->
       let shape = Op.map op ~f:Value.shape |> Op.infer_shape_exn in
       let binder = fresh_var t ~shape in
-      t.equations <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
-      let value : Value.t = T { value = binder; type_id = Expr.Var.type_id; shape } in
-      value)
+      t.equations <- { var = binder; op = Op.map op ~f:(intern_value t) } :: t.equations;
+      Value.create ~value:binder ~type_id:Expr.Var.type_id ~shape)
   ;;
 end
 
@@ -372,7 +395,6 @@ let build_expr
   (module Out : Treeable_intf.S with type t = out)
   ~f
   ~in_tree_def
-  : Expr.t
   =
   let staging = Staging.create () in
   let parameters =
@@ -388,62 +410,116 @@ let build_expr
   let result =
     Staging.handle staging ~f:(fun () ->
       List.map parameters ~f:(fun parameter ->
-        Value.T
-          { value = parameter
-          ; type_id = Expr.Var.type_id
-          ; shape = Expr.Var.shape parameter
-          })
+        Value.create
+          ~value:parameter
+          ~type_id:Expr.Var.type_id
+          ~shape:(Expr.Var.shape parameter))
       |> f)
+  in
+  let return_vals =
+    Nonempty_list.of_list_exn result
+    |> Nonempty_list.map ~f:(Staging.intern_value staging)
+  in
+  let consts =
+    Map.to_alist staging.consts |> List.map ~f:Tuple2.swap |> Expr.Var.Map.of_alist_exn
   in
   Expr.create
     ~parameters
+    ~consts
     ~equations:(List.rev staging.equations)
-    ~return_vals:
-      (Nonempty_list.of_list_exn result
-       |> Nonempty_list.map ~f:(Staging.value_to_atom staging))
+    ~return_vals
     ~out_tree_def:(Set_once.get_exn out_tree_def)
 ;;
 
-let build_expr' ~f ~in_dims : Expr.t =
+let build_expr' ~f ~in_dims =
   build_expr (module Value) (module Value) ~f ~in_tree_def:(Value.tree_def ~dims:in_dims)
 ;;
 
 let%expect_test "build_expr" =
-  build_expr' ~f:foo ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
+  let expr = build_expr' ~f:foo ~in_dims:[||] in
+  Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     v_0[]: float ->
-    v_1[]: float = add v_0 (Tensor 3 Float);
+    consts:
+      c_0[]: float = (Tensor 3 Float)
+    v_1[]: float = add v_0 c_0;
     v_2[]: float = mul v_0 v_1;
     ( v_2 )
     |}]
 ;;
 
 let%expect_test "build_expr2" =
-  build_expr' ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.)) ~in_dims:[||]
-  |> Expr.to_string_hum
-  |> print_endline;
+  (* Distinct [of_float 2.] calls are distinct values, so they are not shared. *)
+  let expr =
+    build_expr'
+      ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.))
+      ~in_dims:[||]
+  in
+  Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     v_0[]: float ->
-    v_1[]: float = mul (Tensor 2 Float) (Tensor 2 Float);
+    consts:
+      c_0[]: float = (Tensor 2 Float)
+      c_1[]: float = (Tensor 2 Float)
+    v_1[]: float = mul c_1 c_0;
     ( v_1 )
     |}]
 ;;
 
-let eval_expr_flat (expr : Expr.t) (input : Value.t list) =
+let%expect_test "a constant returned directly is hoisted into consts" =
+  (* The returned constant occurs only in the return values, not in any equation, so
+     [build_expr] must resolve the return values (which is what hoists the constant)
+     before snapshotting [consts] - otherwise [c_0] would be referenced without appearing
+     in the consts map. *)
+  let expr = build_expr' ~f:(fun _x -> Value.of_float 5.) ~in_dims:[||] in
+  Expr.to_string_hum expr |> print_endline;
+  [%expect
+    {|
+    v_0[]: float ->
+    consts:
+      c_0[]: float = (Tensor 5 Float)
+
+    ( c_0 )
+    |}]
+;;
+
+let%expect_test "shared constants are hoisted and deduplicated" =
+  (* [three] is a single value reused in two ops; it is hoisted into one shared const var
+     [c_0] rather than being embedded inline at each use. *)
+  let three = Value.of_float 3. in
+  let expr =
+    build_expr' ~f:(fun x -> Value.O.((x + three) * (x + three))) ~in_dims:[||]
+  in
+  Expr.to_string_hum expr |> print_endline;
+  [%expect
+    {|
+    v_0[]: float ->
+    consts:
+      c_0[]: float = (Tensor 3 Float)
+    v_1[]: float = add v_0 c_0;
+    v_2[]: float = add v_0 c_0;
+    v_3[]: float = mul v_2 v_1;
+    ( v_3 )
+    |}]
+;;
+
+let eval_expr_flat (expr : Value.t Expr.t) (input : Value.t list) =
   let eval_atom (atom : Expr.Atom.t) ~env =
     match atom with
     | Var var -> Map.find_exn env var
     | Value value -> value
   in
   let env =
-    List.fold
-      expr.equations
-      ~init:(List.zip_exn expr.parameters input |> Expr.Var.Map.of_alist_exn)
-      ~f:(fun env eq ->
-        let result = Op.map eq.op ~f:(eval_atom ~env) |> Op.eval (module Value) in
-        Map.add_exn env ~key:eq.var ~data:result)
+    List.zip_exn expr.parameters input
+    |> Expr.Var.Map.of_alist_exn
+    |> Map.merge_disjoint_exn expr.consts
+  in
+  let env =
+    List.fold expr.equations ~init:env ~f:(fun env eq ->
+      let result = Op.map eq.op ~f:(eval_atom ~env) |> Op.eval (module Value) in
+      Map.add_exn env ~key:eq.var ~data:result)
   in
   Nonempty_list.map expr.return_vals ~f:(eval_atom ~env) |> Nonempty_list.to_list
 ;;
@@ -452,7 +528,7 @@ let eval_expr
   (type in_ out)
   (module In : Treeable_intf.S with type t = in_)
   (module Out : Treeable_intf.S with type t = out)
-  (expr : Expr.t)
+  (expr : Value.t Expr.t)
   (input : in_)
   : out
   =
@@ -467,7 +543,8 @@ let eval_expr' = eval_expr (module Value) (module Value)
 
 let%expect_test "eval_expr" =
   Eval.handle ~f:(fun () ->
-    eval_expr' (build_expr' ~f:foo ~in_dims:[||]) (Value.of_float 2.))
+    let expr = build_expr' ~f:foo ~in_dims:[||] in
+    eval_expr' expr (Value.of_float 2.))
   |> [%sexp_of: Value.t]
   |> print_s;
   [%expect {| (Tensor 10 Float) |}]
@@ -476,7 +553,9 @@ let%expect_test "eval_expr" =
 let%expect_test "jvp and eval_expr" =
   Eval.handle ~f:(fun () ->
     jvp'
-      ~f:(fun x -> eval_expr' (build_expr' ~f:foo ~in_dims:[||]) x)
+      ~f:(fun x ->
+        let expr = build_expr' ~f:foo ~in_dims:[||] in
+        eval_expr' expr x)
       ~primal:(Value.of_float 2.)
       ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
@@ -486,15 +565,18 @@ let%expect_test "jvp and eval_expr" =
 
 let%expect_test "nth_order_derivative build_expr" =
   let print ~n =
-    build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x) ~in_dims:[||]
-    |> Expr.to_string_hum
-    |> print_endline
+    let expr =
+      build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x) ~in_dims:[||]
+    in
+    Expr.to_string_hum expr |> print_endline
   in
   print ~n:0;
   [%expect
     {|
     v_0[]: float ->
-    v_1[]: float = add v_0 (Tensor 3 Float);
+    consts:
+      c_0[]: float = (Tensor 3 Float)
+    v_1[]: float = add v_0 c_0;
     v_2[]: float = mul v_0 v_1;
     ( v_2 )
     |}];
@@ -502,10 +584,14 @@ let%expect_test "nth_order_derivative build_expr" =
   [%expect
     {|
     v_0[]: float ->
-    v_1[]: float = add (Tensor 1 Float) (Tensor 0 Float);
-    v_2[]: float = add v_0 (Tensor 3 Float);
+    consts:
+      c_0[]: float = (Tensor 0 Float)
+      c_1[]: float = (Tensor 1 Float)
+      c_2[]: float = (Tensor 3 Float)
+    v_1[]: float = add c_1 c_0;
+    v_2[]: float = add v_0 c_2;
     v_3[]: float = mul v_0 v_1;
-    v_4[]: float = mul (Tensor 1 Float) v_2;
+    v_4[]: float = mul c_1 v_2;
     v_5[]: float = add v_4 v_3;
     v_6[]: float = mul v_0 v_2;
     ( v_5 )
@@ -514,22 +600,31 @@ let%expect_test "nth_order_derivative build_expr" =
   [%expect
     {|
     v_0[]: float ->
-    v_1[]: float = add (Tensor 0 Float) (Tensor 0 Float);
-    v_2[]: float = add (Tensor 1 Float) (Tensor 0 Float);
-    v_3[]: float = add (Tensor 1 Float) (Tensor 0 Float);
-    v_4[]: float = add v_0 (Tensor 3 Float);
+    consts:
+      c_0[]: float = (Tensor 0 Float)
+      c_1[]: float = (Tensor 0 Float)
+      c_2[]: float = (Tensor 0 Float)
+      c_3[]: float = (Tensor 1 Float)
+      c_4[]: float = (Tensor 0 Float)
+      c_5[]: float = (Tensor 1 Float)
+      c_6[]: float = (Tensor 3 Float)
+      c_7[]: float = (Tensor 0 Float)
+    v_1[]: float = add c_1 c_0;
+    v_2[]: float = add c_3 c_2;
+    v_3[]: float = add c_5 c_4;
+    v_4[]: float = add v_0 c_6;
     v_5[]: float = mul v_0 v_1;
-    v_6[]: float = mul (Tensor 1 Float) v_2;
+    v_6[]: float = mul c_5 v_2;
     v_7[]: float = add v_6 v_5;
     v_8[]: float = mul v_0 v_2;
-    v_9[]: float = mul (Tensor 1 Float) v_3;
-    v_10[]: float = mul (Tensor 0 Float) v_4;
+    v_9[]: float = mul c_3 v_3;
+    v_10[]: float = mul c_7 v_4;
     v_11[]: float = add v_10 v_9;
-    v_12[]: float = mul (Tensor 1 Float) v_4;
+    v_12[]: float = mul c_3 v_4;
     v_13[]: float = add v_11 v_7;
     v_14[]: float = add v_12 v_8;
     v_15[]: float = mul v_0 v_3;
-    v_16[]: float = mul (Tensor 1 Float) v_4;
+    v_16[]: float = mul c_5 v_4;
     v_17[]: float = add v_16 v_15;
     v_18[]: float = mul v_0 v_4;
     ( v_13 )
@@ -601,11 +696,10 @@ module Partial = struct
           <- { var = binder; op = Op.map op ~f:(value_to_atom t) } :: t.equations;
           Unknown binder
       in
-      T
-        { value = result
-        ; type_id = Partial_value.type_id
-        ; shape = Partial_value.shape result
-        })
+      Value.create
+        ~value:result
+        ~type_id:Partial_value.type_id
+        ~shape:(Partial_value.shape result))
   ;;
 end
 
@@ -616,17 +710,16 @@ end
 let partially_apply_expr_flat
   (inputs : Partial_value.t list)
   ~(f : Value.t list -> Value.t list * Value_tree.Def.t)
-  : Partial_value.t list * Expr.t
+  : Partial_value.t list * Value.t Expr.t
   =
   let partial = Partial.create () in
   let outputs, out_tree_def =
     Partial.handle partial ~f:(fun () ->
       List.map inputs ~f:(fun input ->
-        Value.T
-          { value = input
-          ; type_id = Partial_value.type_id
-          ; shape = Partial_value.shape input
-          })
+        Value.create
+          ~value:input
+          ~type_id:Partial_value.type_id
+          ~shape:(Partial_value.shape input))
       |> f)
   in
   let outputs = List.map outputs ~f:Partial.lift in
@@ -639,6 +732,7 @@ let partially_apply_expr_flat
   , match
       Expr.create
         ~parameters:(only_unknowns inputs)
+        ~consts:Expr.Var.Map.empty
         ~equations:(List.rev partial.equations)
         ~return_vals:
           (only_unknowns outputs
@@ -786,7 +880,8 @@ let%expect_test "linearize" =
     let c = Value.neg b in
     c
   in
-  build_expr' ~f ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
+  let expr = build_expr' ~f ~in_dims:[||] in
+  Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -794,13 +889,14 @@ let%expect_test "linearize" =
     v_2[]: float = neg v_1;
     ( v_2 )
     |}];
-  build_expr
-    (module Value.Tuple2)
-    (module Value.Tuple2)
-    ~f:(fun (a, b) -> jvp' ~f ~primal:a ~tangent:b)
-    ~in_tree_def:(Value.Tuple2.tree_def ~dims1:[||] ~dims2:[||])
-  |> Expr.to_string_hum
-  |> print_endline;
+  let expr =
+    build_expr
+      (module Value.Tuple2)
+      (module Value.Tuple2)
+      ~f:(fun (a, b) -> jvp' ~f ~primal:a ~tangent:b)
+      ~in_tree_def:(Value.Tuple2.tree_def ~dims1:[||] ~dims2:[||])
+  in
+  Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     v_0[]: float v_1[]: float ->
@@ -811,14 +907,14 @@ let%expect_test "linearize" =
     v_6[]: float = neg v_4;
     ( v_6, v_5 )
     |}];
-  (* TODO: fix consts? *)
-  build_expr'
-    ~f:(fun x ->
-      let y, _f_lin = linearize' ~f ~primals:x in
-      y)
-    ~in_dims:[||]
-  |> Expr.to_string_hum
-  |> print_endline;
+  let expr =
+    build_expr'
+      ~f:(fun x ->
+        let y, _f_lin = linearize' ~f ~primals:x in
+        y)
+      ~in_dims:[||]
+  in
+  Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -828,17 +924,20 @@ let%expect_test "linearize" =
     ( v_3 )
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
-  build_expr' ~f:f_lin ~in_dims:[||] |> Expr.to_string_hum |> print_endline;
+  let expr = build_expr' ~f:f_lin ~in_dims:[||] in
+  Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
     v_0[]: float ->
-    v_1[]: float = mul (Tensor 1 Float) v_0;
+    consts:
+      c_0[]: float = (Tensor 1 Float)
+    v_1[]: float = mul c_0 v_0;
     v_2[]: float = neg v_1;
     ( v_2 )
     |}]
 ;;
 
-let eval_expr_transposed (expr : Expr.t) args ~cotangents =
+let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
   let accum_gradient ~ct_env var value =
     Map.update ct_env var ~f:(function
       | None -> value

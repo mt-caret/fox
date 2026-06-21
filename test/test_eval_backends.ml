@@ -270,6 +270,7 @@ let expr_generator ~op_nums =
   let out = List.hd_exn equations |> Expr.Eq.var in
   Expr.create
     ~parameters:[ arg ]
+    ~consts:Expr.Var.Map.empty
     ~equations:(List.rev equations)
     ~return_vals:[ Expr.Atom.Var out ]
     ~out_tree_def:(Value_tree.Def.leaf ~dims:(Expr.Var.dims out))

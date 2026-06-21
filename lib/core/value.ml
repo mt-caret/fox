@@ -15,7 +15,7 @@ let of_typed_tensor (type a) (tensor : a Tensor.Typed.t) =
   let type_id =
     Tensor.Typed.type_ tensor |> Type.type_equal_id |> Tensor.Typed.type_equal_id
   in
-  T { value = tensor; type_id; shape = Tensor.Typed.shape tensor }
+  create ~value:tensor ~type_id ~shape:(Tensor.Typed.shape tensor)
 ;;
 
 let of_tensor (Tensor.T tensor) = of_typed_tensor tensor

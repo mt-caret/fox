@@ -32,8 +32,9 @@ module Eq : sig
   [@@deriving sexp_of, fields ~getters]
 end
 
-type t = private
+type 'a t = private
   { parameters : Var.t list
+  ; consts : 'a Var.Map.t
   ; equations : Eq.t list
   ; return_vals : Atom.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
@@ -42,9 +43,11 @@ type t = private
 
 val create
   :  parameters:Var.t list
+  -> consts:Value.t Var.Map.t
   -> equations:Eq.t list
   -> return_vals:Atom.t Nonempty_list.t
   -> out_tree_def:Value_tree.Def.t
-  -> t
+  -> Value.t t
 
-val to_string_hum : t -> string
+val map_consts : 'a t -> f:('a -> 'b) -> 'b t
+val to_string_hum : Value.t t -> string

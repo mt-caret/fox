@@ -35,7 +35,9 @@ module Atom = struct
     | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
   ;;
 
-  let of_value (T { value = x; type_id; shape } as value : Value.t) ~(vars : Var.Set.t)
+  let of_value
+    (T { value = x; type_id; shape; id = _ } as value : Value.t)
+    ~(vars : Var.Set.t)
     : t
     =
     match Type_equal.Id.same_witness type_id Var.type_id with
@@ -68,27 +70,42 @@ module Eq = struct
   ;;
 end
 
-type t =
+type 'a t =
   { parameters : Var.t list
+  ; consts : 'a Var.Map.t
   ; equations : Eq.t list
   ; return_vals : Atom.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
   }
 [@@deriving sexp_of, fields ~getters]
 
-let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
+let map_consts t ~f = { t with consts = Map.map t.consts ~f }
+
+let to_string_hum { parameters; consts; equations; return_vals; out_tree_def = _ } =
   let parameters = String.concat ~sep:" " (List.map parameters ~f:Var.to_string) in
+  let consts =
+    match Map.is_empty consts with
+    | true -> ""
+    | false ->
+      let consts =
+        Map.to_alist consts
+        |> List.map ~f:(fun (var, value) ->
+          [%string "  %{var#Var} = %{[%sexp_of: Value.t] value#Sexp}"])
+        |> String.concat ~sep:"\n"
+      in
+      [%string "\nconsts:\n%{consts}"]
+  in
   let equations = String.concat ~sep:"\n" (List.map equations ~f:Eq.to_string) in
   let return_vals =
     Nonempty_list.to_list return_vals
     |> List.map ~f:Atom.to_string
     |> String.concat ~sep:", "
   in
-  [%string "%{parameters#String} ->\n%{equations#String}\n( %{return_vals} )"]
+  [%string "%{parameters#String} ->%{consts}\n%{equations#String}\n( %{return_vals} )"]
 ;;
 
-let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
-  let env = Var.Set.of_list parameters in
+let validate ({ parameters; consts; equations; return_vals; out_tree_def = _ } as t) =
+  let env = Var.Set.of_list (parameters @ Map.keys consts) in
   let validate_atoms ~env (atoms : Atom.t list) =
     match
       List.filter_map atoms ~f:(function
@@ -110,8 +127,8 @@ let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
   Nonempty_list.to_list return_vals |> validate_atoms ~env
 ;;
 
-let create ~parameters ~equations ~return_vals ~out_tree_def =
-  let t = { parameters; equations; return_vals; out_tree_def } in
+let create ~parameters ~consts ~equations ~return_vals ~out_tree_def =
+  let t = { parameters; consts; equations; return_vals; out_tree_def } in
   validate t;
   t
 ;;
