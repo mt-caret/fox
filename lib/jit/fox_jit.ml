@@ -160,41 +160,56 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
     |> Nonempty_list.map ~f:(fun (literal, shape) -> tensor_of_xla_literal literal ~shape))
 ;;
 
-(* TODO: One crucial difference between the implementation here and autodidax is that the
-   compilation is not cached. One approach would be to have [jit] take an [in_tree_def]
-   argument, and return a staged function of type [in_ -> out] (with some validation that
-   the tree def matches up, or alternatively recompile if it doesn't?).
-*)
+(* [jit] returns a reusable function that traces and compiles [f] the first time it sees a
+   given input structure, then reuses the compiled executable on later calls with the same
+   structure.
+
+   The cache key is the input's [Value_tree.Def.t] - its shapes - not the traced [expr]
+   itself. fox has no data-dependent control flow, so input shapes fully determine the
+   program; the def therefore cannot collide on distinct programs, and a cache hit skips
+   re-tracing entirely. This mirrors real JAX, whose top-level [jit] cache is keyed on
+   (function, input avals) precisely so that a hit skips re-tracing; autodidax, by
+   contrast, keys on the jaxpr itself and so re-traces on every call just to compute the
+   key. If value-dependent structure were ever added, the sound key would instead be the
+   traced structure - [Expr.map_consts expr ~f:(fun _ -> ())], a [unit Expr.t] - at the
+   cost of re-tracing on every call. *)
 let jit
   (type in_ out)
   (module In : Treeable_intf.S with type t = in_)
   (module Out : Treeable_intf.S with type t = out)
   ?print_hlo
   ~f
-  (input : in_)
-  : out
+  ()
+  : (in_ -> out) Staged.t
   =
-  let input_tree = In.tree_of_t input in
-  let input_tree_def = Value_tree.to_def input_tree in
-  let flattened_input_tensors =
-    Value_tree.flatten input_tree |> List.map ~f:(Value.to_typed_tensor_exn Float)
-  in
-  let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
-  let xla_callable = xla_callable ?print_hlo expr |> Staged.unstage in
-  let output =
-    xla_callable flattened_input_tensors
-    |> Nonempty_list.to_list
-    |> List.map ~f:Value.of_tensor
-  in
-  Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree
+  let cache = Value_tree.Def.Table.create () in
+  Staged.stage (fun input ->
+    let input_tree = In.tree_of_t input in
+    let input_tree_def = Value_tree.to_def input_tree in
+    let flattened_input_tensors =
+      Value_tree.flatten input_tree |> List.map ~f:(Value.to_typed_tensor_exn Float)
+    in
+    let callable, out_tree_def =
+      Hashtbl.find_or_add cache input_tree_def ~default:(fun () ->
+        let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
+        xla_callable ?print_hlo expr |> Staged.unstage, expr.out_tree_def)
+    in
+    let output =
+      callable flattened_input_tensors
+      |> Nonempty_list.to_list
+      |> List.map ~f:Value.of_tensor
+    in
+    Value_tree.unflatten output ~def:out_tree_def |> Out.t_of_tree)
 ;;
 
-let jit' ?print_hlo ~f x = jit (module Value) (module Value) ?print_hlo ~f x
+let jit' ?print_hlo ~f () = jit (module Value) (module Value) ?print_hlo ~f ()
 
 let%expect_test "jit'" =
   (* Suppresses noisy XLA log message *)
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
-  jit' ~print_hlo:true ~f:foo (Value.of_float 2.) |> [%sexp_of: Value.t] |> print_s;
+  Staged.unstage (jit' ~print_hlo:true ~f:foo ()) (Value.of_float 2.)
+  |> [%sexp_of: Value.t]
+  |> print_s;
   [%expect
     {|
     HloModule xla_call.6, entry_computation_layout={(f64[])->(f64[])}
@@ -209,11 +224,13 @@ let%expect_test "jit'" =
     (Tensor 10 Float)
     |}];
   (* Two-argument function *)
-  jit
-    ~print_hlo:true
-    (module Treeable.Tuple2 (Value) (Value))
-    (module Value)
-    ~f:(fun (a, b) -> Value.O.(Value.sin a * Value.cos b))
+  Staged.unstage
+    (jit
+       ~print_hlo:true
+       (module Treeable.Tuple2 (Value) (Value))
+       (module Value)
+       ~f:(fun (a, b) -> Value.O.(Value.sin a * Value.cos b))
+       ())
     (Value.of_float 2., Value.of_float 3.)
   |> [%sexp_of: Value.t]
   |> print_s;
@@ -236,11 +253,13 @@ let%expect_test "jit'" =
 let%expect_test "jit and matmul" =
   let a = Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ] |> Value.of_tensor in
   let b = Tensor.of_list2_exn Float [ [ 5.; 6. ]; [ 7.; 8. ] ] |> Value.of_tensor in
-  jit
-    ~print_hlo:true
-    (module Treeable.Tuple2 (Value) (Value))
-    (module Value)
-    ~f:(fun (a, b) -> Value.matmul a b)
+  Staged.unstage
+    (jit
+       ~print_hlo:true
+       (module Treeable.Tuple2 (Value) (Value))
+       (module Value)
+       ~f:(fun (a, b) -> Value.matmul a b)
+       ())
     (a, b)
   |> [%sexp_of: Value.t]
   |> print_s;
@@ -259,9 +278,8 @@ let%expect_test "jit and matmul" =
 ;;
 
 let%expect_test "jit and sum" =
-  jit'
-    ~print_hlo:true
-    ~f:(fun x -> Value.sum x)
+  Staged.unstage
+    (jit' ~print_hlo:true ~f:(fun x -> Value.sum x) ())
     (Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
@@ -286,9 +304,8 @@ let%expect_test "jit and sum" =
 ;;
 
 let%expect_test "jit and broadcast" =
-  jit'
-    ~print_hlo:true
-    ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |])
+  Staged.unstage
+    (jit' ~print_hlo:true ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |]) ())
     (Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;
@@ -302,5 +319,43 @@ let%expect_test "jit and broadcast" =
       ROOT %tuple.30 = (f64[2,2,2]{2,1,0}) tuple(f64[2,2,2]{2,1,0} %broadcast.29)
     }
     (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2)) (type_ Float))
+    |}]
+;;
+
+let%expect_test "jit caches the compiled executable per input structure" =
+  let jitted = Staged.unstage (jit' ~print_hlo:true ~f:(fun x -> Value.O.(x * x)) ()) in
+  (* The first call traces and compiles, printing the HLO. *)
+  let a = jitted (Value.of_float 2.) in
+  [%expect
+    {|
+    HloModule xla_call.35, entry_computation_layout={(f64[])->(f64[])}
+
+    ENTRY %xla_call.35 (v_0.32: f64[]) -> (f64[]) {
+      %v_0.32 = f64[] parameter(0)
+      %multiply.33 = f64[] multiply(f64[] %v_0.32, f64[] %v_0.32)
+      ROOT %tuple.34 = (f64[]) tuple(f64[] %multiply.33)
+    }
+    |}];
+  (* A second call with the same input structure reuses the compiled executable - nothing
+     is printed. *)
+  let b = jitted (Value.of_float 5.) in
+  [%expect {| |}];
+  (* A different input structure is a separate cache entry, so it compiles again. *)
+  let c = jitted (Value.of_tensor (Tensor.of_list Float [ 1.; 2. ])) in
+  [%expect
+    {|
+    HloModule xla_call.39, entry_computation_layout={(f64[2]{0})->(f64[2]{0})}
+
+    ENTRY %xla_call.39 (v_0.36: f64[2]) -> (f64[2]) {
+      %v_0.36 = f64[2]{0} parameter(0)
+      %multiply.37 = f64[2]{0} multiply(f64[2]{0} %v_0.36, f64[2]{0} %v_0.36)
+      ROOT %tuple.38 = (f64[2]{0}) tuple(f64[2]{0} %multiply.37)
+    }
+    |}];
+  print_s [%message (a : Value.t) (b : Value.t) (c : Value.t)];
+  [%expect
+    {|
+    ((a (Tensor 4 Float)) (b (Tensor 25 Float))
+     (c (Tensor (1 4) (dims (2)) (type_ Float))))
     |}]
 ;;

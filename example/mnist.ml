@@ -170,10 +170,12 @@ let command =
         |> Value.of_typed_tensor
       in
       let loss =
-        Fox_jit.jit
-          (module Model)
-          (module Value)
-          ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
+        Staged.unstage
+          (Fox_jit.jit
+             (module Model)
+             (module Value)
+             ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
+             ())
           !model
       in
       print_s [%message "test dataset loss" (loss : Value.t)]
@@ -194,14 +196,16 @@ let command =
         |> Value.of_typed_tensor
       in
       let loss, grad =
-        Fox_jit.jit
-          (module Model)
-          (module Treeable.Tuple2 (Value) (Model))
-          ~f:(fun model ->
-            grad_and_value
-              (module Model)
-              ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
-              ~x:model)
+        Staged.unstage
+          (Fox_jit.jit
+             (module Model)
+             (module Treeable.Tuple2 (Value) (Model))
+             ~f:(fun model ->
+               grad_and_value
+                 (module Model)
+                 ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
+                 ~x:model)
+             ())
           !model
       in
       let average_grad_l2_norm =

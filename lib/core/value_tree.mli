@@ -10,6 +10,8 @@ val to_value_exn : t -> Value0.t
 module Def : sig
   type t [@@deriving sexp_of, compare]
 
+  include Hashable.S with type t := t
+
   (* TODO: change [dims] to [shape] *)
   val leaf : dims:int array -> t
   val node : t String.Map.t -> t

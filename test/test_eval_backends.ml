@@ -339,7 +339,7 @@ let%expect_test "eval expr vs xla" =
       let f value = eval_expr' expr value in
       let value = Value.of_tensor tensor in
       let eval_result = Eval.handle ~f:(fun () -> f value) in
-      let xla_result = Fox_jit.jit' ~f value in
+      let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
       assert (
         Tensor.allclose
           ~equal_nan:true
@@ -350,7 +350,7 @@ let%expect_test "eval expr vs xla" =
 let%expect_test "grad+jit vs grad+eval" =
   let test ~f ~x =
     Eval.handle ~f:(fun () -> f x) |> [%sexp_of: Value.t] |> print_s;
-    Fox_jit.jit' ~f x |> [%sexp_of: Value.t] |> print_s
+    Staged.unstage (Fox_jit.jit' ~f ()) x |> [%sexp_of: Value.t] |> print_s
   in
   test
     ~f:(fun value -> grad' ~f:(fun value -> Value.O.(value * value)) ~x:value)
@@ -405,7 +405,7 @@ let%expect_test "eval grad expr vs xla" =
       in
       let value = Value.of_tensor tensor in
       let eval_result = Eval.handle ~f:(fun () -> f value) in
-      let xla_result = Fox_jit.jit' ~f value in
+      let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
       assert (
         Tensor.allclose
           ~equal_nan:true

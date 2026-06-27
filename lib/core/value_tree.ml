@@ -1,10 +1,14 @@
 open! Core
 
+(* [Def] hashes [int array]s of dims, which it treats as immutable; ppx_hash only hashes
+   arrays via the explicit "frozen" fold. *)
+let hash_fold_array = Hash.Builtin.hash_fold_array_frozen
+
 module General = struct
   type 'value t =
     | Leaf of 'value
     | Node of 'value t Map.M(String).t
-  [@@deriving sexp, compare, variants, quickcheck]
+  [@@deriving sexp, compare, hash, variants, quickcheck]
 
   let rec length : _ t -> int = function
     | Leaf _ -> 1
@@ -43,7 +47,12 @@ let rec flatten : 'value General.t -> 'value list = function
 ;;
 
 module Def = struct
-  type t = int array General.t [@@deriving sexp, compare, quickcheck]
+  module T = struct
+    type t = int array General.t [@@deriving sexp, compare, hash, quickcheck]
+  end
+
+  include T
+  include Hashable.Make (T)
 
   let leaf ~dims = General.leaf dims
   let node = General.node
