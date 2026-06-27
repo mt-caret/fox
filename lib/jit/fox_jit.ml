@@ -28,7 +28,7 @@ let xla_subcomp
     |> Expr.Var.Map.of_alist_exn
     |> Map.merge_disjoint_exn const_ops
   in
-  let read_atom (atom : Expr.Atom.t) ~env =
+  let read_atom (atom : Value.t Expr.Atom.t) ~env =
     match atom with
     | Var var -> Map.find_exn env var
     | Value value ->
@@ -190,8 +190,8 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
    (function, input avals) precisely so that a hit skips re-tracing; autodidax, by
    contrast, keys on the jaxpr itself and so re-traces on every call just to compute the
    key. If value-dependent structure were ever added, the sound key would instead be the
-   traced structure - [Expr.map_consts expr ~f:(fun _ -> ())], a [unit Expr.t] - at the
-   cost of re-tracing on every call. *)
+   traced structure - [Expr.map expr ~f:(fun _ -> ())], a [unit Expr.t] - at the cost of
+   re-tracing on every call. *)
 let jit
   (type in_ out)
   (module In : Treeable_intf.S with type t = in_)

@@ -32,6 +32,7 @@ let to_tensor_exn t =
 
 let of_float x = of_typed_tensor (Tensor.Typed.of_lit Float x)
 let to_float_exn t : float = to_typed_tensor_exn Float t |> Tensor.Typed.item
+let to_string t = [%sexp_of: t] t |> Sexp.to_string
 
 include Op.Make_operators (struct
     type nonrec t = t [@@deriving sexp_of]

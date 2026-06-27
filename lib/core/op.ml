@@ -9,7 +9,7 @@ module Unary = struct
     | Exp
     | Log
     | Sigmoid
-  [@@deriving sexp, enumerate]
+  [@@deriving sexp, enumerate, compare, hash]
 
   let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
 end
@@ -23,7 +23,7 @@ module Binary = struct
     | Eq
     | Gt
     | Lt
-  [@@deriving sexp, enumerate]
+  [@@deriving sexp, enumerate, compare, hash]
 
   let to_string t = [%sexp_of: t] t |> Sexp.to_string |> String.lowercase
 end
@@ -46,7 +46,7 @@ type 'value t =
       { value : 'value
       ; dims : int iarray
       }
-[@@deriving sexp_of, variants]
+[@@deriving sexp_of, compare, hash, variants]
 
 let map t ~f =
   match t with

@@ -294,7 +294,7 @@ let%expect_test "expr_generator" =
   let random = Splittable_random.of_int 0 in
   for i = 1 to 5 do
     let expr = Generator.generate (expr_generator ~op_nums:i) ~size:6 ~random in
-    Expr.to_string_hum expr |> print_endline;
+    Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
     print_endline "--------------------------------"
   done;
   [%expect
@@ -348,7 +348,10 @@ let%expect_test "eval expr vs xla" =
     (fun_generator ~op_nums:1)
     ~trials:300
     ~sexp_of:(fun (tensor, expr) ->
-      [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+      [%sexp
+        { tensor : Tensor.t
+        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+        }])
     ~f:(fun (tensor, expr) ->
       let f value = eval_expr' expr value in
       let value = Value.of_tensor tensor in
@@ -401,7 +404,10 @@ let%expect_test "eval grad expr vs xla" =
        likely a result of not properly releasing resources somewhere. *)
     ~trials:200
     ~sexp_of:(fun (tensor, expr) ->
-      [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+      [%sexp
+        { tensor : Tensor.t
+        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+        }])
     ~f:(fun (tensor, expr) ->
       let f value =
         grad'

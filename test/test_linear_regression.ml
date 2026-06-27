@@ -22,7 +22,7 @@ let%expect_test "linear regression" =
   let weights = ref (Tensor.normal ~dims:[: num_features :] ~rng ()) in
   let loss_grad x = grad' ~f:loss ~x in
   let expr = build_expr' ~f:loss ~in_dims:[: num_features :] in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[2]: float ->
@@ -42,7 +42,7 @@ let%expect_test "linear regression" =
     Eval.handle ~f:(fun () -> vjp' ~f:loss ~primal:(Value.of_tensor !weights))
   in
   let expr = build_expr' ~f:f_jvp ~in_dims:[::] in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->

@@ -23,6 +23,7 @@ val to_typed_tensor_exn : 'a Type.t -> t -> 'a Tensor.Typed.t
 val to_tensor_exn : t -> Tensor.t
 val of_float : float -> t
 val to_float_exn : t -> float
+val to_string : t -> string
 
 include Treeable.S with type t := t
 include Operators_intf.S with type t := t

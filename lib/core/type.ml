@@ -32,6 +32,8 @@ module Packed = struct
 
   let compare (T t1) (T t2) = compare (rank t1) (rank t2)
   let equal = [%compare.equal: t]
+  let hash_fold_t state (T t) = hash_fold_int state (rank t)
+  let hash = Hash.of_fold hash_fold_t
   let sexp_of_t (T t) = [%sexp_of: _ typed] t
 
   let t_of_sexp sexp =

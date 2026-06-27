@@ -339,7 +339,7 @@ let%expect_test "pertubation confusion avoidance" =
 
 module Staging = struct
   type t =
-    { mutable equations : Expr.Eq.t list
+    { mutable equations : Value.t Expr.Eq.t list
     ; mutable var_name_counter : int
     ; mutable const_name_counter : int
     ; mutable vars : Expr.Var.Set.t
@@ -363,7 +363,7 @@ module Staging = struct
     var
   ;;
 
-  let intern_value t value : Expr.Atom.t =
+  let intern_value t value : Value.t Expr.Atom.t =
     match Expr.Atom.of_value ~vars:t.vars value with
     | Var var -> Var var
     | Value value ->
@@ -437,7 +437,7 @@ let build_expr' ~f ~in_dims =
 
 let%expect_test "build_expr" =
   let expr = build_expr' ~f:foo ~in_dims:[::] in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -456,7 +456,7 @@ let%expect_test "build_expr2" =
       ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.))
       ~in_dims:[::]
   in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -468,13 +468,37 @@ let%expect_test "build_expr2" =
     |}]
 ;;
 
+let%expect_test "[Expr.map ~f:(fun _ -> ())] is a value-free structural key" =
+  let structure f = build_expr' ~f ~in_dims:[::] |> Expr.map ~f:(fun _ -> ()) in
+  let a = structure (fun x -> Value.O.((x * Value.of_float 3.) + Value.of_float 5.)) in
+  let b = structure (fun x -> Value.O.((x * Value.of_float 7.) + Value.of_float 9.)) in
+  let c = structure (fun x -> Value.O.(x * x)) in
+  (* The constants are erased to (), so [a] (constants 3, 5) and [b] (constants 7, 9) are
+     structurally equal, while [c] is a different program. *)
+  print_endline (Expr.to_string_hum a ~value_to_string:Unit.to_string);
+  [%expect
+    {|
+    v_0[]: float ->
+    consts:
+      c_0[]: float = ()
+      c_1[]: float = ()
+    v_1[]: float = mul v_0 c_0;
+    v_2[]: float = add v_1 c_1;
+    ( v_2 )
+    |}];
+  let equal = [%compare.equal: unit Expr.t] in
+  let same_hash x y = [%hash: unit Expr.t] x = [%hash: unit Expr.t] y in
+  print_s [%message (equal a b : bool) (same_hash a b : bool) (equal a c : bool)];
+  [%expect {| (("equal a b" true) ("same_hash a b" true) ("equal a c" false)) |}]
+;;
+
 let%expect_test "a constant returned directly is hoisted into consts" =
   (* The returned constant occurs only in the return values, not in any equation, so
      [build_expr] must resolve the return values (which is what hoists the constant)
      before snapshotting [consts] - otherwise [c_0] would be referenced without appearing
      in the consts map. *)
   let expr = build_expr' ~f:(fun _x -> Value.of_float 5.) ~in_dims:[::] in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -492,7 +516,7 @@ let%expect_test "shared constants are hoisted and deduplicated" =
   let expr =
     build_expr' ~f:(fun x -> Value.O.((x + three) * (x + three))) ~in_dims:[::]
   in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -506,7 +530,7 @@ let%expect_test "shared constants are hoisted and deduplicated" =
 ;;
 
 let eval_expr_flat (expr : Value.t Expr.t) (input : Value.t list) =
-  let eval_atom (atom : Expr.Atom.t) ~env =
+  let eval_atom (atom : Value.t Expr.Atom.t) ~env =
     match atom with
     | Var var -> Map.find_exn env var
     | Value value -> value
@@ -568,7 +592,7 @@ let%expect_test "nth_order_derivative build_expr" =
     let expr =
       build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x) ~in_dims:[::]
     in
-    Expr.to_string_hum expr |> print_endline
+    Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline
   in
   print ~n:0;
   [%expect
@@ -653,7 +677,7 @@ end
 
 module Partial = struct
   type t =
-    { mutable equations : Expr.Eq.t list
+    { mutable equations : Value.t Expr.Eq.t list
     ; mutable name_counter : int
     ; mutable vars : Expr.Var.Set.t
     }
@@ -768,7 +792,7 @@ let%expect_test "partially_apply_expr_flat" =
      (Known (Tensor 2 Float))
      (Unknown ((name p_1) (shape ((dims ()) (type_ Float))))))
     |}];
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     x[]: float ->
@@ -830,7 +854,7 @@ let linearize
           [%message
             "unexpected unknown primal"
               (outputs : Partial_value.t list)
-              ~expr:(Expr.to_string_hum expr)])
+              ~expr:(Expr.to_string_hum expr ~value_to_string:Value.to_string)])
     |> Value_tree.unflatten ~def:expr.out_tree_def
     |> Out.t_of_tree
   in
@@ -881,7 +905,7 @@ let%expect_test "linearize" =
     c
   in
   let expr = build_expr' ~f ~in_dims:[::] in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -896,7 +920,7 @@ let%expect_test "linearize" =
       ~f:(fun (a, b) -> jvp' ~f ~primal:a ~tangent:b)
       ~in_tree_def:(Value.Tuple2.tree_def ~dims1:[::] ~dims2:[::])
   in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float v_1[]: float ->
@@ -914,7 +938,7 @@ let%expect_test "linearize" =
         y)
       ~in_dims:[::]
   in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -925,7 +949,7 @@ let%expect_test "linearize" =
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
   let expr = build_expr' ~f:f_lin ~in_dims:[::] in
-  Expr.to_string_hum expr |> print_endline;
+  Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
     {|
     v_0[]: float ->
@@ -955,7 +979,8 @@ let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
       match return_val with
       | Value _ ->
         (* TODO: do we actually want to just ignore constnats? *)
-        raise_s [%message "unexpected const return value" (return_val : Expr.Atom.t)]
+        raise_s
+          [%message "unexpected const return value" (return_val : Value.t Expr.Atom.t)]
       | Var var -> accum_gradient ~ct_env var cotangent)
   in
   let ct_env =
@@ -1037,8 +1062,8 @@ let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
           raise_s
             [%message
               "Invalid var/val op combination"
-                (op : Expr.Atom.t Op.t)
-                ~expr:(Expr.to_string_hum expr)]
+                (op : Value.t Expr.Atom.t Op.t)
+                ~expr:(Expr.to_string_hum expr ~value_to_string:Value.to_string)]
       in
       ct_env)
   in
@@ -1095,7 +1120,7 @@ let vjp
           [%message
             "unexpected unknown primal"
               (outputs : Partial_value.t list)
-              ~expr:(Expr.to_string_hum expr)])
+              ~expr:(Expr.to_string_hum expr ~value_to_string:Value.to_string)])
     |> Value_tree.unflatten ~def:expr.out_tree_def
     |> Out.t_of_tree
   in
@@ -1116,7 +1141,9 @@ let vjp
     | exception exn ->
       Exn.reraise
         exn
-        (Sexp.to_string_hum [%message (exn : exn) ~expr:(Expr.to_string_hum expr)])
+        (Sexp.to_string_hum
+           [%message
+             (exn : exn) ~expr:(Expr.to_string_hum expr ~value_to_string:Value.to_string)])
   in
   output, f_vjp
 ;;
