@@ -128,17 +128,15 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
           ~builder:xla_builder
       , shape ))
   in
-  (* Hoisted constants are fed as runtime parameters (after the real parameters) rather
-     than baked in as XLA constants, so a single compiled executable serves any constant
-     values of the same structure. *)
+  (* Hoisted constants become XLA parameters (after the real parameters), supplied per
+     call at execution time rather than baked in, so one compiled executable serves any
+     constant values of the same structure. Their shapes come from the const vars, so
+     compilation depends only on the structure, not the values. *)
   let num_params = List.length expr.parameters in
-  let const_bindings =
-    Map.to_alist expr.consts
-    |> List.map ~f:(fun (var, value) -> var, Value.to_typed_tensor_exn Float value)
-  in
   let const_ops =
-    List.mapi const_bindings ~f:(fun i (var, tensor) ->
-      let shape = Tensor.Typed.shape tensor in
+    Map.to_alist expr.consts
+    |> List.mapi ~f:(fun i (var, _value) ->
+      let shape = Expr.Var.shape var in
       let op =
         Xla.Op.parameter
           (Expr.Var.name var)
@@ -161,12 +159,10 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
     |> String.strip
     |> print_endline;
   let xla_exe = Xla.Executable.compile xla_client computation in
-  Staged.stage (fun inputs ->
+  Staged.stage (fun inputs const_values ->
     let inputs =
-      List.map
-        (inputs @ List.map const_bindings ~f:snd)
-        ~f:(fun tensor ->
-          tensor_to_xla_literal tensor |> Xla.Buffer.of_host_literal ~device:xla_device)
+      List.map (inputs @ const_values) ~f:(fun tensor ->
+        tensor_to_xla_literal tensor |> Xla.Buffer.of_host_literal ~device:xla_device)
       |> List.to_array
     in
     let buffers = Xla.Executable.execute_b xla_exe inputs in
@@ -179,19 +175,22 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
     |> Nonempty_list.map ~f:(fun (literal, shape) -> tensor_of_xla_literal literal ~shape))
 ;;
 
-(* [jit] returns a reusable function that traces and compiles [f] the first time it sees a
-   given input structure, then reuses the compiled executable on later calls with the same
-   structure.
+module Structure = struct
+  (* The value-free structure of a traced program - the compilation cache key. *)
+  type t = unit Expr.t [@@deriving compare, hash, sexp_of]
+end
 
-   The cache key is the input's [Value_tree.Def.t] - its shapes - not the traced [expr]
-   itself. fox has no data-dependent control flow, so input shapes fully determine the
-   program; the def therefore cannot collide on distinct programs, and a cache hit skips
-   re-tracing entirely. This mirrors real JAX, whose top-level [jit] cache is keyed on
-   (function, input avals) precisely so that a hit skips re-tracing; autodidax, by
-   contrast, keys on the jaxpr itself and so re-traces on every call just to compute the
-   key. If value-dependent structure were ever added, the sound key would instead be the
-   traced structure - [Expr.map expr ~f:(fun _ -> ())], a [unit Expr.t] - at the cost of
-   re-tracing on every call. *)
+(* [jit] returns a reusable function that traces [f] on every call and reuses a compiled
+   executable cached by the program's [Structure.t] (the traced [expr] with all values
+   erased). Because constants are fed as runtime parameters, one executable serves every
+   call that shares a structure, and each call supplies its own constants - so even a
+   closure whose captured constants change reuses the executable and still gets correct
+   results.
+
+   This is the autodidax model (re-trace every call, cache only the compilation), rather
+   than keying on input shapes to skip re-tracing (real JAX). The structure key stays
+   sound even if value-dependent control flow is ever added, since distinct programs get
+   distinct keys. *)
 let jit
   (type in_ out)
   (module In : Treeable_intf.S with type t = in_)
@@ -201,24 +200,29 @@ let jit
   ()
   : (in_ -> out) Staged.t
   =
-  let cache = Value_tree.Def.Table.create () in
+  let cache = Hashtbl.create (module Structure) in
   Staged.stage (fun input ->
     let input_tree = In.tree_of_t input in
     let input_tree_def = Value_tree.to_def input_tree in
     let flattened_input_tensors =
       Value_tree.flatten input_tree |> List.map ~f:(Value.to_typed_tensor_exn Float)
     in
-    let callable, out_tree_def =
-      Hashtbl.find_or_add cache input_tree_def ~default:(fun () ->
-        let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
-        xla_callable ?print_hlo expr |> Staged.unstage, expr.out_tree_def)
+    let expr = build_expr (module In) (module Out) ~f ~in_tree_def:input_tree_def in
+    let callable =
+      Hashtbl.find_or_add
+        cache
+        (Expr.map expr ~f:(fun _ -> ()))
+        ~default:(fun () -> xla_callable ?print_hlo expr |> Staged.unstage)
+    in
+    let const_values =
+      Map.data expr.consts |> List.map ~f:(Value.to_typed_tensor_exn Float)
     in
     let output =
-      callable flattened_input_tensors
+      callable flattened_input_tensors const_values
       |> Nonempty_list.to_list
       |> List.map ~f:Value.of_tensor
     in
-    Value_tree.unflatten output ~def:out_tree_def |> Out.t_of_tree)
+    Value_tree.unflatten output ~def:expr.out_tree_def |> Out.t_of_tree)
 ;;
 
 let jit' ?print_hlo ~f () = jit (module Value) (module Value) ?print_hlo ~f ()
@@ -405,4 +409,48 @@ let%expect_test "distinct constants are fed as separate runtime parameters" =
     }
     (Tensor 11 Float)
     |}]
+;;
+
+let%expect_test "one executable serves a closure whose captured constant changes" =
+  let c = ref 3. in
+  let jitted =
+    Staged.unstage (jit' ~print_hlo:true ~f:(fun x -> Value.O.(x * Value.of_float !c)) ())
+  in
+  (* The first call compiles (HLO printed), feeding the current constant as a parameter. *)
+  let r1 = jitted (Value.of_float 2.) in
+  [%expect
+    {|
+    HloModule xla_call.51, entry_computation_layout={(f64[],f64[])->(f64[])}
+
+    ENTRY %xla_call.51 (v_0.47: f64[], c_0.48: f64[]) -> (f64[]) {
+      %v_0.47 = f64[] parameter(0)
+      %c_0.48 = f64[] parameter(1)
+      %multiply.49 = f64[] multiply(f64[] %v_0.47, f64[] %c_0.48)
+      ROOT %tuple.50 = (f64[]) tuple(f64[] %multiply.49)
+    }
+    |}];
+  (* The captured constant changes, but the structure does not: the executable is reused
+     (no HLO) and the new value is fed in - so r1 uses 3 (= 6) and r2 uses 10 (= 20). *)
+  c := 10.;
+  let r2 = jitted (Value.of_float 2.) in
+  [%expect {| |}];
+  print_s [%message (r1 : Value.t) (r2 : Value.t)];
+  [%expect {| ((r1 (Tensor 6 Float)) (r2 (Tensor 20 Float))) |}]
+;;
+
+let%expect_test "a cache hit feeds the call's own (multiple) constants, in order" =
+  let c1 = ref 3.
+  and c2 = ref 5. in
+  let jitted =
+    Staged.unstage
+      (jit' ~f:(fun x -> Value.O.((x * Value.of_float !c1) + Value.of_float !c2)) ())
+  in
+  let r1 = jitted (Value.of_float 2.) in
+  c1 := 10.;
+  c2 := 100.;
+  (* The reused executable is fed [c1 = 10], [c2 = 100] in the right slots: 2*10 + 100 =
+     120 (a swapped order would give 2*100 + 10 = 210). *)
+  let r2 = jitted (Value.of_float 2.) in
+  print_s [%message (r1 : Value.t) (r2 : Value.t)];
+  [%expect {| ((r1 (Tensor 11 Float)) (r2 (Tensor 120 Float))) |}]
 ;;

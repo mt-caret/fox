@@ -149,15 +149,14 @@ let command =
     Dataset.print train ~i:0;
     let rng = Splittable_random.of_int seed in
     let model = ref (Model.create ~rng) in
-    let print_dataset_loss () =
+    let batch_values ~images ~labels =
       let x =
-        Tensor.reshape train.x ~dims:[: -1; 28 * 28 :]
+        Tensor.reshape images ~dims:[: -1; 28 * 28 :]
         |> Tensor.to_typed_exn Float
         |> Tensor.Typed.map Float ~f:(fun x -> x /. 255.)
         |> Value.of_typed_tensor
       in
       let y =
-        let labels = train.y in
         Tensor.Typed.init
           Float
           ~dims:[: Tensor.length labels; 10 :]
@@ -166,45 +165,44 @@ let command =
             if label = index.:(1) then 1. else 0.)
         |> Value.of_typed_tensor
       in
-      let loss =
-        Staged.unstage
-          (Fox_jit.jit
-             (module Model)
-             (module Value)
-             ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
-             ())
-          !model
-      in
+      x, y
+    in
+    (* The [jit] closures are created once, here, rather than rebuilt per iteration. Each
+       takes its batch [(x, y)] as inputs, so the program is compiled on the first call
+       and the executable is reused for every later call of the same structure (all
+       batches share a shape). *)
+    let dataset_loss =
+      Staged.unstage
+        (Fox_jit.jit
+           (module Treeable.Tuple2 (Model) (Treeable.Tuple2 (Value) (Value)))
+           (module Value)
+           ~f:(fun (model, (x, y)) -> Model.cross_entropy_loss model ~x ~y)
+           ())
+    in
+    let eval_x, eval_y = batch_values ~images:train.x ~labels:train.y in
+    let print_dataset_loss () =
+      let loss = dataset_loss (!model, (eval_x, eval_y)) in
       print_s [%message "test dataset loss" (loss : Value.t)]
     in
+    let train_step =
+      Staged.unstage
+        (Fox_jit.jit
+           (module Treeable.Tuple2 (Model) (Treeable.Tuple2 (Value) (Value)))
+           (module Treeable.Tuple2 (Value) (Model))
+           ~f:(fun (model, (x, y)) ->
+             grad_and_value
+               (module Model)
+               ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
+               ~x:model)
+           ())
+    in
     for i = 0 to (Dataset.length train / batch_size) - 1 do
-      let x =
-        Tensor.sub_left train.x ~pos:(i * batch_size) ~len:batch_size
-        |> Tensor.reshape ~dims:[: -1; 28 * 28 :]
-        |> Tensor.to_typed_exn Float
-        |> Tensor.Typed.map Float ~f:(fun x -> x /. 255.)
-        |> Value.of_typed_tensor
+      let x, y =
+        batch_values
+          ~images:(Tensor.sub_left train.x ~pos:(i * batch_size) ~len:batch_size)
+          ~labels:(Tensor.sub_left train.y ~pos:(i * batch_size) ~len:batch_size)
       in
-      let y =
-        let labels = Tensor.sub_left train.y ~pos:(i * batch_size) ~len:batch_size in
-        Tensor.Typed.init Float ~dims:[: batch_size; 10 :] ~f:(fun index ->
-          let label = Tensor.get_exn Float labels [: index.:(0) :] |> Float.to_int in
-          if label = index.:(1) then 1. else 0.)
-        |> Value.of_typed_tensor
-      in
-      let loss, grad =
-        Staged.unstage
-          (Fox_jit.jit
-             (module Model)
-             (module Treeable.Tuple2 (Value) (Model))
-             ~f:(fun model ->
-               grad_and_value
-                 (module Model)
-                 ~f:(fun model -> Model.cross_entropy_loss model ~x ~y)
-                 ~x:model)
-             ())
-          !model
-      in
+      let loss, grad = train_step (!model, (x, y)) in
       let average_grad_l2_norm =
         Eval.handle ~f:(fun () ->
           let grad_norms =

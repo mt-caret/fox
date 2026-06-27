@@ -2,3 +2,4 @@ _build
 _opam
 *.install
 xla_extension
+/mnist
