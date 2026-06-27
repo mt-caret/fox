@@ -19,7 +19,7 @@ module type S = sig
   val lt : t -> t -> t
   val matmul : t -> t -> t
   val transpose : t -> t
-  val reshape : t -> dims:int array -> t
+  val reshape : t -> dims:int iarray -> t
   val sum : ?dims:[ `Just of int Nonempty_list.t | `All ] -> ?keep_dims:bool -> t -> t
   val mean : ?dims:[ `Just of int Nonempty_list.t | `All ] -> ?keep_dims:bool -> t -> t
 
@@ -38,7 +38,7 @@ module type S = sig
     -> t
 
   val softmax : dim:int -> t -> t
-  val broadcast : t -> dims:int array -> t
+  val broadcast : t -> dims:int iarray -> t
   val scale : t -> float -> t
 
   module O : sig

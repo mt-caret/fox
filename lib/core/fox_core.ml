@@ -77,7 +77,7 @@ module Jvp = struct
 
   let dual_number t ~primal ~tangent : Dual_number.t =
     Option.iter tangent ~f:(fun tangent ->
-      [%test_eq: int array] (Value.dims primal) (Value.dims tangent);
+      [%test_eq: int iarray] (Value.dims primal) (Value.dims tangent);
       assert (Type.Packed.equal (Value.type_ primal) (Value.type_ tangent)));
     { primal; tangent; id = t.id }
   ;;
@@ -436,7 +436,7 @@ let build_expr' ~f ~in_dims =
 ;;
 
 let%expect_test "build_expr" =
-  let expr = build_expr' ~f:foo ~in_dims:[||] in
+  let expr = build_expr' ~f:foo ~in_dims:[::] in
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
@@ -454,7 +454,7 @@ let%expect_test "build_expr2" =
   let expr =
     build_expr'
       ~f:(fun _x -> Value.O.(Value.of_float 2. * Value.of_float 2.))
-      ~in_dims:[||]
+      ~in_dims:[::]
   in
   Expr.to_string_hum expr |> print_endline;
   [%expect
@@ -473,7 +473,7 @@ let%expect_test "a constant returned directly is hoisted into consts" =
      [build_expr] must resolve the return values (which is what hoists the constant)
      before snapshotting [consts] - otherwise [c_0] would be referenced without appearing
      in the consts map. *)
-  let expr = build_expr' ~f:(fun _x -> Value.of_float 5.) ~in_dims:[||] in
+  let expr = build_expr' ~f:(fun _x -> Value.of_float 5.) ~in_dims:[::] in
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
@@ -490,7 +490,7 @@ let%expect_test "shared constants are hoisted and deduplicated" =
      [c_0] rather than being embedded inline at each use. *)
   let three = Value.of_float 3. in
   let expr =
-    build_expr' ~f:(fun x -> Value.O.((x + three) * (x + three))) ~in_dims:[||]
+    build_expr' ~f:(fun x -> Value.O.((x + three) * (x + three))) ~in_dims:[::]
   in
   Expr.to_string_hum expr |> print_endline;
   [%expect
@@ -543,7 +543,7 @@ let eval_expr' = eval_expr (module Value) (module Value)
 
 let%expect_test "eval_expr" =
   Eval.handle ~f:(fun () ->
-    let expr = build_expr' ~f:foo ~in_dims:[||] in
+    let expr = build_expr' ~f:foo ~in_dims:[::] in
     eval_expr' expr (Value.of_float 2.))
   |> [%sexp_of: Value.t]
   |> print_s;
@@ -554,7 +554,7 @@ let%expect_test "jvp and eval_expr" =
   Eval.handle ~f:(fun () ->
     jvp'
       ~f:(fun x ->
-        let expr = build_expr' ~f:foo ~in_dims:[||] in
+        let expr = build_expr' ~f:foo ~in_dims:[::] in
         eval_expr' expr x)
       ~primal:(Value.of_float 2.)
       ~tangent:(Value.of_float 1.))
@@ -566,7 +566,7 @@ let%expect_test "jvp and eval_expr" =
 let%expect_test "nth_order_derivative build_expr" =
   let print ~n =
     let expr =
-      build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x) ~in_dims:[||]
+      build_expr' ~f:(fun x -> nth_order_derivative ~n ~f:foo ~x) ~in_dims:[::]
     in
     Expr.to_string_hum expr |> print_endline
   in
@@ -751,13 +751,13 @@ let%expect_test "partially_apply_expr_flat" =
     Eval.handle ~f:(fun () ->
       partially_apply_expr_flat
         [ Known (Value.of_float 2.)
-        ; Unknown { name = "x"; shape = { dims = [||]; type_ = T Float } }
+        ; Unknown { name = "x"; shape = { dims = [::]; type_ = T Float } }
         ]
         ~f:(function
           | [ x; y ] ->
             let x2 = Value.O.(x * x) in
             ( [ x2; Value.O.((x2 * y) + Value.of_float 3.); x; Value.O.((y * y) + x2) ]
-            , Value.tree_def ~dims:[||] )
+            , Value.tree_def ~dims:[::] )
           | _ -> assert false))
   in
   print_s ([%sexp_of: Partial_value.t list] partial_values);
@@ -880,7 +880,7 @@ let%expect_test "linearize" =
     let c = Value.neg b in
     c
   in
-  let expr = build_expr' ~f ~in_dims:[||] in
+  let expr = build_expr' ~f ~in_dims:[::] in
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
@@ -894,7 +894,7 @@ let%expect_test "linearize" =
       (module Value.Tuple2)
       (module Value.Tuple2)
       ~f:(fun (a, b) -> jvp' ~f ~primal:a ~tangent:b)
-      ~in_tree_def:(Value.Tuple2.tree_def ~dims1:[||] ~dims2:[||])
+      ~in_tree_def:(Value.Tuple2.tree_def ~dims1:[::] ~dims2:[::])
   in
   Expr.to_string_hum expr |> print_endline;
   [%expect
@@ -912,7 +912,7 @@ let%expect_test "linearize" =
       ~f:(fun x ->
         let y, _f_lin = linearize' ~f ~primals:x in
         y)
-      ~in_dims:[||]
+      ~in_dims:[::]
   in
   Expr.to_string_hum expr |> print_endline;
   [%expect
@@ -924,7 +924,7 @@ let%expect_test "linearize" =
     ( v_3 )
     |}];
   let _y, f_lin = Eval.handle ~f:(fun () -> linearize' ~f ~primals:(Value.of_float 0.)) in
-  let expr = build_expr' ~f:f_lin ~in_dims:[||] in
+  let expr = build_expr' ~f:f_lin ~in_dims:[::] in
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
@@ -1004,11 +1004,12 @@ let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
           |> accum_gradient ~ct_env var
         | Broadcast { value = Var var; dims = to_dims } ->
           let from_dims = Expr.Var.dims var in
-          let padding_length = Array.length to_dims - Array.length from_dims in
+          let padding_length = Iarray.length to_dims - Iarray.length from_dims in
           let non_padded_broadcasts =
-            Array.sub to_dims ~pos:padding_length ~len:(Array.length from_dims)
-            |> Array.zip_exn from_dims
-            |> Array.filter_mapi ~f:(fun i (from, to_) ->
+            Iarray.sub to_dims ~pos:padding_length ~len:(Iarray.length from_dims)
+            |> Iarray.zip_exn from_dims
+            |> Iarray.to_list
+            |> List.filter_mapi ~f:(fun i (from, to_) ->
               if from <> to_ then Some i else None)
           in
           let unpadded_cotangent =
@@ -1020,7 +1021,7 @@ let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
                 ~dims:(`Just (Nonempty_list.init padding_length ~f:Fn.id))
                 ~keep_dims:false
           in
-          (match Array.to_list non_padded_broadcasts |> Nonempty_list.of_list with
+          (match Nonempty_list.of_list non_padded_broadcasts with
            | None -> unpadded_cotangent
            | Some non_padded_broadcasts ->
              Value.sum
@@ -1175,7 +1176,7 @@ let%expect_test "grad" =
   Eval.handle ~f:(fun () ->
     grad'
       ~f:(fun x ->
-        Value.broadcast x ~dims:[| 3; 4 |] |> Value.sum ~dims:(`Just [ 1 ]) |> Value.mean)
+        Value.broadcast x ~dims:[: 3; 4 :] |> Value.sum ~dims:(`Just [ 1 ]) |> Value.mean)
       ~x:(Value.of_typed_tensor (Tensor.Typed.arange 4)))
   |> [%sexp_of: Value.t]
   |> print_s;

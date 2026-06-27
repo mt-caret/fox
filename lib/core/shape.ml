@@ -1,12 +1,9 @@
 open! Core
 
-module T = struct
-  type t =
-    { dims : int array
-    ; type_ : Type.Packed.t
-    }
-  [@@deriving equal, compare, sexp, fields ~getters]
-end
+type t =
+  { dims : int iarray
+  ; type_ : Type.Packed.t
+  }
+[@@deriving equal, compare, sexp, fields ~getters]
 
-include T
-include Comparable.Make_plain (T)
+include functor Comparable.Make_plain

@@ -11,7 +11,7 @@ type t = private
 [@@deriving sexp_of]
 
 val create : value:'a -> type_id:'a Type_equal.Id.t -> shape:Shape.t -> t
-val dims : t -> int array
+val dims : t -> int iarray
 val type_ : t -> Type.Packed.t
 val shape : t -> Shape.t
 val coerce : t -> type_id:'a Type_equal.Id.t -> 'a option

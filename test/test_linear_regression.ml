@@ -7,21 +7,21 @@ let%expect_test "linear regression" =
   let num_iters = 100 in
   let learning_rate = 0.01 in
   let rng = Splittable_random.of_int 0 in
-  let x = Tensor.normal ~dims:[| num_examples; num_features |] ~rng () in
-  let true_params = Tensor.normal ~dims:[| num_features |] ~rng () in
+  let x = Tensor.normal ~dims:[: num_examples; num_features :] ~rng () in
+  let true_params = Tensor.normal ~dims:[: num_features :] ~rng () in
   let y =
     Tensor.O.(
       Tensor.matmul x true_params
-      + Tensor.normal ~dims:[| num_examples |] ~std:1e-2 ~rng ())
+      + Tensor.normal ~dims:[: num_examples :] ~std:1e-2 ~rng ())
   in
   let loss weights =
     let open Value.O in
     let error = Value.of_tensor y - Value.matmul (Value.of_tensor x) weights in
     Value.mean (error * error)
   in
-  let weights = ref (Tensor.normal ~dims:[| num_features |] ~rng ()) in
+  let weights = ref (Tensor.normal ~dims:[: num_features :] ~rng ()) in
   let loss_grad x = grad' ~f:loss ~x in
-  let expr = build_expr' ~f:loss ~in_dims:[| num_features |] in
+  let expr = build_expr' ~f:loss ~in_dims:[: num_features :] in
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|
@@ -41,7 +41,7 @@ let%expect_test "linear regression" =
   let _y, f_jvp =
     Eval.handle ~f:(fun () -> vjp' ~f:loss ~primal:(Value.of_tensor !weights))
   in
-  let expr = build_expr' ~f:f_jvp ~in_dims:[||] in
+  let expr = build_expr' ~f:f_jvp ~in_dims:[::] in
   Expr.to_string_hum expr |> print_endline;
   [%expect
     {|

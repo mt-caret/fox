@@ -23,26 +23,26 @@ module Dataset = struct
     in
     Tensor.init
       Float
-      ~dims:[| Bigstring.length contents |]
-      ~f:(fun index -> Bigstring.get contents index.(0) |> Char.to_int |> Int.to_float)
+      ~dims:[: Bigstring.length contents :]
+      ~f:(fun index -> Bigstring.get contents index.:(0) |> Char.to_int |> Int.to_float)
   ;;
 
   let load ~x ~y =
-    { x = load ~header_length:16 x |> Tensor.reshape ~dims:[| -1; 28; 28 |]
+    { x = load ~header_length:16 x |> Tensor.reshape ~dims:[: -1; 28; 28 :]
     ; y = load ~header_length:8 y
     }
   ;;
 
   let print { x; y } ~i =
-    let n = Tensor.get_exn Float y [| i |] |> Int.of_float in
+    let n = Tensor.get_exn Float y [: i :] |> Int.of_float in
     print_endline [%string "Label: %{n#Int}"];
-    let x = Tensor.left_slice x ~indices:[| i |] in
+    let x = Tensor.left_slice x ~indices:[: i :] in
     let image =
       List.range 0 28
       |> List.map ~f:(fun row ->
         List.range 0 28
         |> List.map ~f:(fun col ->
-          let pixel = Tensor.get_exn Float x [| row; col |] in
+          let pixel = Tensor.get_exn Float x [: row; col :] in
           let pixel = 255 - Int.of_float (pixel /. 255. *. 23.) in
           [%string "\027[48;5;%{pixel#Int}m "])
         |> String.concat)
@@ -53,40 +53,37 @@ module Dataset = struct
 end
 
 module Model = struct
-  module T = struct
-    type t =
-      { h1 : Value.t
-      ; b1 : Value.t
-      ; h2 : Value.t
-      ; b2 : Value.t
-      ; h3 : Value.t
-      ; b3 : Value.t
-      }
-    [@@deriving typed_fields, sexp_of]
+  type t =
+    { h1 : Value.t
+    ; b1 : Value.t
+    ; h2 : Value.t
+    ; b2 : Value.t
+    ; h3 : Value.t
+    ; b3 : Value.t
+    }
+  [@@deriving typed_fields, sexp_of]
 
-    let field_treeable (type a) (local_ (field : a Typed_field.t))
-      : (a -> Value_tree.t) * (module Treeable.S with type t = a)
-      =
-      match field with
-      | H1 -> Value.tree_of_t, (module Value)
-      | B1 -> Value.tree_of_t, (module Value)
-      | H2 -> Value.tree_of_t, (module Value)
-      | B2 -> Value.tree_of_t, (module Value)
-      | H3 -> Value.tree_of_t, (module Value)
-      | B3 -> Value.tree_of_t, (module Value)
-    ;;
-  end
+  let field_treeable (type a) (local_ (field : a Typed_field.t))
+    : (a -> Value_tree.t) * (module Treeable.S with type t = a)
+    =
+    match field with
+    | H1 -> Value.tree_of_t, (module Value)
+    | B1 -> Value.tree_of_t, (module Value)
+    | H2 -> Value.tree_of_t, (module Value)
+    | B2 -> Value.tree_of_t, (module Value)
+    | H3 -> Value.tree_of_t, (module Value)
+    | B3 -> Value.tree_of_t, (module Value)
+  ;;
 
-  include T
-  include Treeable.Of_typed_fields (T)
+  include functor Treeable.Of_typed_fields
 
   let create ~rng =
-    { h1 = Tensor.normal ~dims:[| 784; 128 |] ~rng () |> Value.of_tensor
-    ; b1 = Tensor.zeros ~dims:[| 128 |] |> Value.of_tensor
-    ; h2 = Tensor.normal ~dims:[| 128; 64 |] ~rng () |> Value.of_tensor
-    ; b2 = Tensor.zeros ~dims:[| 64 |] |> Value.of_tensor
-    ; h3 = Tensor.normal ~dims:[| 64; 10 |] ~rng () |> Value.of_tensor
-    ; b3 = Tensor.zeros ~dims:[| 10 |] |> Value.of_tensor
+    { h1 = Tensor.normal ~dims:[: 784; 128 :] ~rng () |> Value.of_tensor
+    ; b1 = Tensor.zeros ~dims:[: 128 :] |> Value.of_tensor
+    ; h2 = Tensor.normal ~dims:[: 128; 64 :] ~rng () |> Value.of_tensor
+    ; b2 = Tensor.zeros ~dims:[: 64 :] |> Value.of_tensor
+    ; h3 = Tensor.normal ~dims:[: 64; 10 :] ~rng () |> Value.of_tensor
+    ; b3 = Tensor.zeros ~dims:[: 10 :] |> Value.of_tensor
     }
   ;;
 
@@ -108,18 +105,18 @@ module Model = struct
 
   let linear ~h ~b ~bs x =
     let open Value.O in
-    let b = Value.broadcast b ~dims:(Array.append [| bs |] (Value.dims b)) in
+    let b = Value.broadcast b ~dims:(Iarray.append [: bs :] (Value.dims b)) in
     Value.matmul x h + b
   ;;
 
   let run { h1; b1; h2; b2; h3; b3 } x =
     match Value.dims x with
-    | [| bs; 784 |] ->
+    | [: bs; 784 :] ->
       let x (* bs x 128 *) = linear ~h:h1 ~b:b1 ~bs x |> Value.sigmoid in
       let x (* bs x 64 *) = linear ~h:h2 ~b:b2 ~bs x |> Value.sigmoid in
       let x (* bs x 10 *) = linear ~h:h3 ~b:b3 ~bs x |> Value.softmax ~dim:1 in
       x
-    | _ -> raise_s [%message "Invalid input dimensions" ~dims:(Value.dims x : int array)]
+    | _ -> raise_s [%message "Invalid input dimensions" ~dims:(Value.dims x : int iarray)]
   ;;
 
   let cross_entropy_loss t ~x ~y =
@@ -154,7 +151,7 @@ let command =
     let model = ref (Model.create ~rng) in
     let print_dataset_loss () =
       let x =
-        Tensor.reshape train.x ~dims:[| -1; 28 * 28 |]
+        Tensor.reshape train.x ~dims:[: -1; 28 * 28 :]
         |> Tensor.to_typed_exn Float
         |> Tensor.Typed.map Float ~f:(fun x -> x /. 255.)
         |> Value.of_typed_tensor
@@ -163,10 +160,10 @@ let command =
         let labels = train.y in
         Tensor.Typed.init
           Float
-          ~dims:[| Tensor.length labels; 10 |]
+          ~dims:[: Tensor.length labels; 10 :]
           ~f:(fun index ->
-            let label = Tensor.get_exn Float labels [| index.(0) |] |> Float.to_int in
-            if label = index.(1) then 1. else 0.)
+            let label = Tensor.get_exn Float labels [: index.:(0) :] |> Float.to_int in
+            if label = index.:(1) then 1. else 0.)
         |> Value.of_typed_tensor
       in
       let loss =
@@ -183,16 +180,16 @@ let command =
     for i = 0 to (Dataset.length train / batch_size) - 1 do
       let x =
         Tensor.sub_left train.x ~pos:(i * batch_size) ~len:batch_size
-        |> Tensor.reshape ~dims:[| -1; 28 * 28 |]
+        |> Tensor.reshape ~dims:[: -1; 28 * 28 :]
         |> Tensor.to_typed_exn Float
         |> Tensor.Typed.map Float ~f:(fun x -> x /. 255.)
         |> Value.of_typed_tensor
       in
       let y =
         let labels = Tensor.sub_left train.y ~pos:(i * batch_size) ~len:batch_size in
-        Tensor.Typed.init Float ~dims:[| batch_size; 10 |] ~f:(fun index ->
-          let label = Tensor.get_exn Float labels [| index.(0) |] |> Float.to_int in
-          if label = index.(1) then 1. else 0.)
+        Tensor.Typed.init Float ~dims:[: batch_size; 10 :] ~f:(fun index ->
+          let label = Tensor.get_exn Float labels [: index.:(0) :] |> Float.to_int in
+          if label = index.:(1) then 1. else 0.)
         |> Value.of_typed_tensor
       in
       let loss, grad =

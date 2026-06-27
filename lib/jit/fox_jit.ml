@@ -53,7 +53,7 @@ let xla_subcomp
             | Sigmoid ->
               fun x ->
                 let one =
-                  Tensor.Typed.ones ~dims:(Xla.Op.dims x)
+                  Tensor.Typed.ones ~dims:(Iarray.of_array (Xla.Op.dims x))
                   |> tensor_to_xla_literal
                   |> Xla.Op.constant ~builder
                 in
@@ -81,7 +81,7 @@ let xla_subcomp
           (* TODO: support arbitrary dimensions *)
           Xla.Op.transpose a ~dim_indexes:[| 1; 0 |]
         | Sum { value = value, in_shape; dims; keep_dims } ->
-          let in_dims = Shape.dims in_shape in
+          let in_dims = Iarray.to_array (Shape.dims in_shape) in
           let dims =
             match dims with
             | `All -> Array.init (Array.length in_dims) ~f:Fn.id
@@ -89,13 +89,15 @@ let xla_subcomp
           in
           Xla.Op.reduce_sum value ~dims ~keep_dims
         | Broadcast { value = value, in_shape; dims = out_dims } ->
-          let in_dims = Shape.dims in_shape in
+          let in_dims = Iarray.to_array (Shape.dims in_shape) in
+          let out_dims = Iarray.to_array out_dims in
           let padding_length = Array.length out_dims - Array.length in_dims in
           Xla.Op.broadcast_in_dim
             value
             ~out_dims
             ~broadcast_dims:(Array.mapi in_dims ~f:(fun i _ -> padding_length + i))
-        | Reshape { value = value, _; dims } -> Xla.Op.reshape value ~dims
+        | Reshape { value = value, _; dims } ->
+          Xla.Op.reshape value ~dims:(Iarray.to_array dims)
       in
       let shape = Op.map op ~f:snd |> Op.infer_shape_exn in
       Map.add_exn env ~key:var ~data:(xla_op, shape))
@@ -122,7 +124,7 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
             (match type_ with
              | T Float -> F64
              | T Bool -> Pred)
-          ~dims
+          ~dims:(Iarray.to_array dims)
           ~builder:xla_builder
       , shape ))
   in
@@ -305,7 +307,7 @@ let%expect_test "jit and sum" =
 
 let%expect_test "jit and broadcast" =
   Staged.unstage
-    (jit' ~print_hlo:true ~f:(fun x -> Value.broadcast x ~dims:[| 2; 2; 2 |]) ())
+    (jit' ~print_hlo:true ~f:(fun x -> Value.broadcast x ~dims:[: 2; 2; 2 :]) ())
     (Value.of_tensor (Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ]))
   |> [%sexp_of: Value.t]
   |> print_s;

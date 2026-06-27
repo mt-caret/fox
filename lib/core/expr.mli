@@ -8,7 +8,7 @@ module Var : sig
   [@@deriving compare, sexp, fields ~getters]
 
   val type_id : t Type_equal.Id.t
-  val dims : t -> int array
+  val dims : t -> int iarray
 
   include Comparable.S_plain with type t := t
 end
@@ -21,7 +21,7 @@ module Atom : sig
 
   val of_value : Value.t -> vars:Var.Set.t -> t
   val shape : t -> Shape.t
-  val dims : t -> int array
+  val dims : t -> int iarray
 end
 
 module Eq : sig

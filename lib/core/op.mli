@@ -36,11 +36,11 @@ type 'value t =
       }
   | Broadcast of
       { value : 'value
-      ; dims : int array
+      ; dims : int iarray
       }
   | Reshape of
       { value : 'value
-      ; dims : int array
+      ; dims : int iarray
       }
 [@@deriving sexp_of]
 

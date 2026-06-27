@@ -3,8 +3,10 @@ open! Fox_core
 open! Base_quickcheck
 
 module Dims = struct
-  type t = int array [@@deriving quickcheck, sexp_of, compare]
+  type t = int iarray [@@deriving sexp_of, compare]
 
+  (* The generator builds a valid (positive, exactly-multiplying) dims array and freezes
+     it; the observer and shrinker defer to the [int array] instances. *)
   let quickcheck_generator =
     Generator.fixed_point (fun quickcheck_generator ->
       let open Generator.Let_syntax in
@@ -18,6 +20,18 @@ module Dims = struct
          | remaining_size ->
            let%map dims = Generator.with_size quickcheck_generator ~size:remaining_size in
            Array.append dims [| this_dim |]))
+    |> Generator.map ~f:Iarray.of_array
+  ;;
+
+  let quickcheck_observer =
+    Observer.unmap [%quickcheck.observer: int array] ~f:Iarray.to_array
+  ;;
+
+  let quickcheck_shrinker =
+    Shrinker.map
+      [%quickcheck.shrinker: int array]
+      ~f:Iarray.of_array
+      ~f_inverse:Iarray.to_array
   ;;
 end
 
@@ -26,7 +40,7 @@ module Tensor = struct
 
   let quickcheck_generator_with_dims ~dims =
     let open Generator.Let_syntax in
-    let total_elements = Array.fold dims ~init:1 ~f:( * ) in
+    let total_elements = Iarray.fold dims ~init:1 ~f:( * ) in
     let%map values =
       List.init total_elements ~f:(fun _ -> Generator.float_inclusive (-100.) 100.)
       |> Generator.all
@@ -44,10 +58,10 @@ module Tensor = struct
     Shrinker.create (fun (Tensor.T tensor) ->
       let dims = Tensor.Typed.dims tensor in
       let sliced_tensors =
-        if Array.length dims > 0
+        if Iarray.length dims > 0
         then
-          Sequence.init dims.(0) ~f:(fun i ->
-            T (Tensor.Typed.left_slice tensor ~indices:[| i |]))
+          Sequence.init dims.:(0) ~f:(fun i ->
+            T (Tensor.Typed.left_slice tensor ~indices:[: i :]))
         else Sequence.empty
       in
       let smaller_tensors =
@@ -179,7 +193,7 @@ let op_generator ~values_by_shape =
          let%bind.Option all_shapes =
            match
              Map.keys values_by_shape
-             |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) = 2)
+             |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) = 2)
            with
            | [] -> None
            | all_shapes -> Some all_shapes
@@ -188,8 +202,8 @@ let op_generator ~values_by_shape =
            List.concat_map all_shapes ~f:(fun lhs_shape ->
              List.filter_map all_shapes ~f:(fun rhs_shape ->
                match lhs_shape, rhs_shape with
-               | { dims = [| _; m |]; type_ = _ }, { dims = [| m' |]; type_ = _ }
-               | { dims = [| _; m |]; type_ = _ }, { dims = [| m'; _ |]; type_ = _ } ->
+               | { dims = [: _; m :]; type_ = _ }, { dims = [: m' :]; type_ = _ }
+               | { dims = [: _; m :]; type_ = _ }, { dims = [: m'; _ :]; type_ = _ } ->
                  Option.some_if (m = m') (lhs_shape, rhs_shape)
                | _ -> None))
          with
@@ -205,7 +219,7 @@ let op_generator ~values_by_shape =
     | Transpose () ->
       (match
          Map.keys values_by_shape
-         |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) = 2)
+         |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) = 2)
        with
        | [] -> return None
        | all_dims ->
@@ -225,7 +239,7 @@ let op_generator ~values_by_shape =
          in
          (match
             Map.keys values_by_shape
-            |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) > max_index)
+            |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) > max_index)
           with
           | [] -> return None
           | all_shapes ->

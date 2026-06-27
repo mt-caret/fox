@@ -1,7 +1,7 @@
 open! Core
 
 type t =
-  { dims : int array
+  { dims : int iarray
   ; type_ : Type.Packed.t
   }
 [@@deriving equal, compare, sexp, fields ~getters]

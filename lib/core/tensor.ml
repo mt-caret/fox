@@ -13,7 +13,9 @@ module Typed = struct
         }
         -> 'logical_type t
 
-  let dims (T { bigarray; mapping = _ }) = Bigarray.Genarray.dims bigarray
+  let dims (T { bigarray; mapping = _ }) =
+    Iarray.of_array (Bigarray.Genarray.dims bigarray)
+  ;;
 
   let type_ (type a) (T { bigarray = _; mapping } : a t) : a Type.t =
     match mapping with
@@ -23,7 +25,7 @@ module Typed = struct
 
   let shape t : Shape.t = { dims = dims t; type_ = T (type_ t) }
   let num_dims (T { bigarray; mapping = _ }) = Bigarray.Genarray.num_dims bigarray
-  let length t = dims t |> Array.fold ~init:1 ~f:( * )
+  let length t = dims t |> Iarray.fold ~init:1 ~f:( * )
 
   let char_to_bool = function
     | '\000' -> false
@@ -37,21 +39,23 @@ module Typed = struct
   ;;
 
   let item (type a) (T { bigarray; mapping } as t : a t) : a =
-    match dims t with
-    | [||] ->
+    match Iarray.length (dims t) with
+    | 0 ->
       (match mapping with
        | Float -> Bigarray.Genarray.get bigarray [||]
        | Bool -> Bigarray.Genarray.get bigarray [||] |> char_to_bool)
-    | dims -> raise_s [%message "Tensor.item: dims > 0" (dims : int array)]
+    | _ -> raise_s [%message "Tensor.item: dims > 0" ~dims:(dims t : int iarray)]
   ;;
 
   let get (type a) (T { bigarray; mapping } : a t) index : a =
+    let index = Iarray.to_array index in
     match mapping with
     | Float -> Bigarray.Genarray.get bigarray index
     | Bool -> Bigarray.Genarray.get bigarray index |> char_to_bool
   ;;
 
   let set (type a) (T { bigarray; mapping } : a t) index (value : a) =
+    let index = Iarray.to_array index in
     match mapping with
     | Float -> Bigarray.Genarray.set bigarray index value
     | Bool -> Bigarray.Genarray.set bigarray index (char_of_bool value)
@@ -64,7 +68,10 @@ module Typed = struct
   ;;
 
   let left_slice (type a) (T { bigarray; mapping } : a t) ~indices : a t =
-    T { bigarray = Bigarray.Genarray.slice_left bigarray indices; mapping }
+    T
+      { bigarray = Bigarray.Genarray.slice_left bigarray (Iarray.to_array indices)
+      ; mapping
+      }
   ;;
 
   let sexp_of_a (type a) (t : a t) : a -> Sexp.t =
@@ -76,18 +83,20 @@ module Typed = struct
   let rec sexp_of_t : 'a. ('a -> Sexp.t) -> 'a t -> Sexp.t =
     fun sexp_of_a t ->
     match dims t with
-    | [||] -> item t |> [%sexp_of: a]
-    | [| n |] -> List.init n ~f:(fun i -> get t [| i |]) |> [%sexp_of: a list]
+    | [::] -> item t |> [%sexp_of: a]
+    | [: n :] -> List.init n ~f:(fun i -> get t [: i :]) |> [%sexp_of: a list]
     | dims ->
-      let first_dim = dims.(0) in
+      let first_dim = dims.:(0) in
       List.init first_dim ~f:(fun i ->
-        let t = left_slice t ~indices:[| i |] in
+        let t = left_slice t ~indices:[: i :] in
         sexp_of_t sexp_of_a t)
       |> [%sexp_of: Sexp.t list]
   ;;
 
   let sexp_of_t sexp_of_a t =
-    if length t > 30 then [%sexp { dims : int array = dims t }] else sexp_of_t sexp_of_a t
+    if length t > 30
+    then [%sexp { dims : int iarray = dims t }]
+    else sexp_of_t sexp_of_a t
   ;;
 
   include Type_equal.Id.Create1 (struct
@@ -110,18 +119,21 @@ module Typed = struct
         }
   ;;
 
-  let init (type a) (type_ : a Type.t) ~dims ~(f : int array -> a) : a t =
+  let init (type a) (type_ : a Type.t) ~dims ~(f : int iarray -> a) : a t =
+    let dims = Iarray.to_array dims in
     match type_ with
     | Float ->
       T
-        { bigarray = Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims f
+        { bigarray =
+            Bigarray.Genarray.init Bigarray.float64 Bigarray.c_layout dims (fun index ->
+              f (Iarray.of_array index))
         ; mapping = Float
         }
     | Bool ->
       T
         { bigarray =
             Bigarray.Genarray.init Bigarray.char Bigarray.c_layout dims (fun index ->
-              f index |> char_of_bool)
+              f (Iarray.of_array index) |> char_of_bool)
         ; mapping = Bool
         }
   ;;
@@ -133,6 +145,7 @@ module Typed = struct
   (* TODO: it's a bit sad that we duplicate this checking logic with [Op.infer_dims]; is
      there a way to reduce the duplication here...? *)
   let reshape t ~dims =
+    let dims = Iarray.to_array dims in
     match Array.count dims ~f:(fun dim -> dim = -1) with
     | 0 -> reshape' t ~dims
     | 1 ->
@@ -163,7 +176,7 @@ module Typed = struct
      janestreet/ppx_fixed_literal for prior art. *)
   let of_lit (type a) (type_ : a Type.t) f =
     let t = create_uninitialized type_ [||] in
-    set t [||] f;
+    set t [::] f;
     t
   ;;
 
@@ -175,7 +188,7 @@ module Typed = struct
 
   let of_list (type a) (type_ : a Type.t) (l : a list) : a t =
     let t = create_uninitialized type_ [| List.length l |] in
-    List.iteri l ~f:(fun i x -> set t [| i |] x);
+    List.iteri l ~f:(fun i x -> set t [: i :] x);
     t
   ;;
 
@@ -189,7 +202,7 @@ module Typed = struct
     match List.map ~f:List.length l |> List.dedup_and_sort ~compare:Int.compare with
     | [ row_length ] ->
       let t = create_uninitialized type_ [| List.length l; row_length |] in
-      List.iteri l ~f:(fun i row -> List.iteri row ~f:(fun j x -> set t [| i; j |] x));
+      List.iteri l ~f:(fun i row -> List.iteri row ~f:(fun j x -> set t [: i; j :] x));
       t
     | row_lengths ->
       raise_s [%message "of_list2_exn: non-rectangular list" (row_lengths : int list)]
@@ -202,7 +215,7 @@ module Typed = struct
   ;;
 
   let create (type a) (type_ : a Type.t) ~dims (value : a) : a t =
-    let t = create_uninitialized type_ dims in
+    let t = create_uninitialized type_ (Iarray.to_array dims) in
     fill t value;
     t
   ;;
@@ -213,7 +226,7 @@ module Typed = struct
   let arange n =
     let t = create_uninitialized Float [| n |] in
     for i = 0 to n - 1 do
-      set t [| i |] (Int.to_float i)
+      set t [: i :] (Int.to_float i)
     done;
     t
   ;;
@@ -221,9 +234,9 @@ module Typed = struct
   let%expect_test "arange" =
     arange 12 |> [%sexp_of: float t] |> print_s;
     [%expect {| (0 1 2 3 4 5 6 7 8 9 10 11) |}];
-    arange 12 |> reshape ~dims:[| 6; 2 |] |> [%sexp_of: float t] |> print_s;
+    arange 12 |> reshape ~dims:[: 6; 2 :] |> [%sexp_of: float t] |> print_s;
     [%expect {| ((0 1) (2 3) (4 5) (6 7) (8 9) (10 11)) |}];
-    arange 12 |> reshape ~dims:[| 3; 4 |] |> [%sexp_of: float t] |> print_s;
+    arange 12 |> reshape ~dims:[: 3; 4 :] |> [%sexp_of: float t] |> print_s;
     [%expect {| ((0 1 2 3) (4 5 6 7) (8 9 10 11)) |}]
   ;;
 
@@ -233,10 +246,10 @@ module Typed = struct
   let map2 (type a) (type_ : a Type.t) t1 t2 ~f =
     let dims1 = dims t1 in
     let dims2 = dims t2 in
-    if not ([%compare.equal: int array] dims1 dims2)
+    if not ([%compare.equal: int iarray] dims1 dims2)
     then
       raise_s
-        [%message "Tensor.map2: dims mismatch" (dims1 : int array) (dims2 : int array)];
+        [%message "Tensor.map2: dims mismatch" (dims1 : int iarray) (dims2 : int iarray)];
     init type_ ~dims:dims1 ~f:(fun index -> f (get t1 index) (get t2 index))
   ;;
 
@@ -253,7 +266,7 @@ module Typed = struct
   let iter t ~f = iteri t ~f:(fun _index value -> f value)
 
   let allclose (type a) ?(equal_nan = false) (t1 : a t) (t2 : a t) =
-    [%equal: int array] (dims t1) (dims t2)
+    [%equal: int iarray] (dims t1) (dims t2)
     &&
     let is_equal = ref true in
     iteri t1 ~f:(fun index value1 ->
@@ -270,7 +283,7 @@ module Typed = struct
   ;;
 
   let sum_single_axis t ~axis ~keep_dim =
-    let dims = dims t in
+    let dims = Iarray.to_array (dims t) in
     let dims_length = Array.length dims in
     if axis < 0 || axis >= dims_length
     then raise_s [%message "sum_single_axis: axis out of bounds" (axis : int)];
@@ -279,10 +292,12 @@ module Typed = struct
     let result_dims =
       Array.concat [ dims_left; (if keep_dim then [| 1 |] else [||]); dims_right ]
     in
-    init Float ~dims:result_dims ~f:(fun index ->
+    init Float ~dims:(Iarray.of_array result_dims) ~f:(fun index ->
+      (* [Iarray.to_array] returns a fresh array we can mutate as scratch for [get]. *)
+      let index = Iarray.to_array index in
       let index =
         if keep_dim
-        then Array.copy index
+        then index
         else
           Array.init dims_length ~f:(fun i ->
             match Ordering.of_int (Int.compare i axis) with
@@ -293,7 +308,7 @@ module Typed = struct
       let acc = ref 0. in
       for i = 0 to dims.(axis) - 1 do
         index.(axis) <- i;
-        acc := !acc +. get t index
+        acc := !acc +. get t (Iarray.of_array index)
       done;
       !acc)
   ;;
@@ -414,47 +429,48 @@ let eval_op (op : t Op.t) =
      | Float, Float ->
        (* TODO: support more than just 2D tensors for matmuls and transposes *)
        (match Typed.dims t1, Typed.dims t2 with
-        | [| n; m |], [| m' |] ->
+        | [: n; m :], [: m' :] ->
           [%test_eq: int] m m';
           let t = Typed.create_uninitialized Float [| n |] in
           for i = 0 to n - 1 do
             let acc = ref 0. in
             for l = 0 to m - 1 do
-              acc := !acc +. (Typed.get t1 [| i; l |] *. Typed.get t2 [| l |])
+              acc := !acc +. (Typed.get t1 [: i; l :] *. Typed.get t2 [: l :])
             done;
-            Typed.set t [| i |] !acc
+            Typed.set t [: i :] !acc
           done;
           T t
-        | [| n; m |], [| m'; k |] ->
+        | [: n; m :], [: m'; k :] ->
           [%test_eq: int] m m';
           let t = Typed.create_uninitialized Float [| n; k |] in
           for i = 0 to n - 1 do
             for j = 0 to k - 1 do
               let acc = ref 0. in
               for l = 0 to m - 1 do
-                acc := !acc +. (Typed.get t1 [| i; l |] *. Typed.get t2 [| l; j |])
+                acc := !acc +. (Typed.get t1 [: i; l :] *. Typed.get t2 [: l; j :])
               done;
-              Typed.set t [| i; j |] !acc
+              Typed.set t [: i; j :] !acc
             done
           done;
           T t
         | t1_dims, t2_dims ->
           raise_s
             [%message
-              "matmul: unsupported dimensions" (t1_dims : int array) (t2_dims : int array)]))
+              "matmul: unsupported dimensions"
+                (t1_dims : int iarray)
+                (t2_dims : int iarray)]))
   | Transpose (T t) ->
     (match Typed.dims t with
-     | [| n; m |] ->
+     | [: n; m :] ->
        T
-         (Typed.init (Typed.type_ t) ~dims:[| m; n |] ~f:(fun index ->
-            Typed.get t [| index.(1); index.(0) |]))
-     | dims -> raise_s [%message "transpose: unsupported dimensions" (dims : int array)])
+         (Typed.init (Typed.type_ t) ~dims:[: m; n :] ~f:(fun index ->
+            Typed.get t [: index.:(1); index.:(0) :]))
+     | dims -> raise_s [%message "transpose: unsupported dimensions" (dims : int iarray)])
   | Sum { value = T t; dims = dims_to_sum; keep_dims } ->
     (match Typed.type_ t with
      | Bool -> raise_s [%message "eval_op: bool tensors not supported" (op : t Op.t)]
      | Float ->
-       let dims = Typed.dims t in
-       let dims_length = Array.length dims in
+       let dims_length = Iarray.length (Typed.dims t) in
        let dims_to_sum =
          (match dims_to_sum with
           | `Just dims_to_sum ->
@@ -468,16 +484,17 @@ let eval_op (op : t Op.t) =
          (List.fold dims_to_sum ~init:t ~f:(fun t axis ->
             Typed.sum_single_axis t ~axis ~keep_dim:keep_dims)))
   | Broadcast { value = T t; dims = to_dims } ->
-    let from_dims = Typed.dims t in
-    let dims_padding_length = Array.length to_dims - Array.length from_dims in
+    let from_dims = Iarray.to_array (Typed.dims t) in
+    let dims_padding_length = Iarray.length to_dims - Array.length from_dims in
     T
       (Typed.init (Typed.type_ t) ~dims:to_dims ~f:(fun index ->
+         let index = Iarray.to_array index in
          let from_index =
            Array.subo index ~pos:dims_padding_length ~len:(Array.length from_dims)
            |> Array.map2_exn from_dims ~f:(fun from_dim index_dim ->
              if from_dim = 1 then 0 else index_dim)
          in
-         Typed.get t from_index))
+         Typed.get t (Iarray.of_array from_index)))
   | Reshape { value = T t; dims = to_dims } -> T (Typed.reshape t ~dims:to_dims)
 ;;
 
@@ -540,12 +557,12 @@ let%expect_test "std" =
 let%expect_test "broadcast" =
   let broadcast_and_print t ~dims:dims' =
     let t = broadcast t ~dims:dims' in
-    print_s [%message "" (t : t) ~dims:(dims t : int array)]
+    print_s [%message "" (t : t) ~dims:(dims t : int iarray)]
   in
   let t = of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ] in
-  broadcast_and_print t ~dims:[| 1; 2; 2 |];
+  broadcast_and_print t ~dims:[: 1; 2; 2 :];
   [%expect {| ((t (((1 2) (3 4)))) (dims (1 2 2))) |}];
-  broadcast_and_print t ~dims:[| 2; 2; 2 |];
+  broadcast_and_print t ~dims:[: 2; 2; 2 :];
   [%expect {| ((t (((1 2) (3 4)) ((1 2) (3 4)))) (dims (2 2 2))) |}]
 ;;
 
@@ -575,13 +592,13 @@ let normal ?(mean = 0.) ?(std = 1.) ~dims ~rng () =
 
 let%expect_test "normal" =
   let rng = Splittable_random.of_int 0 in
-  normal ~dims:[| 2; 2 |] ~rng () |> [%sexp_of: t] |> print_s;
+  normal ~dims:[: 2; 2 :] ~rng () |> [%sexp_of: t] |> print_s;
   [%expect
     {|
     ((0.39995642633665462 1.1602368073797789)
      (1.1461698444484156 -0.27508260258159217))
     |}];
-  let t = normal ~dims:[| 10000 |] ~rng () in
+  let t = normal ~dims:[: 10000 :] ~rng () in
   let mean = mean t |> item_exn Float in
   let std = std t |> item_exn Float in
   print_s [%message "" (mean : float) (std : float)];
@@ -591,13 +608,13 @@ let%expect_test "normal" =
 module With_shape = struct
   type nonrec t = t
 
-  let sexp_of_t t = [%sexp { dims : int array = dims t; tensor : t = t }]
+  let sexp_of_t t = [%sexp { dims : int iarray = dims t; tensor : t = t }]
 end
 
 module Just_shape = struct
   type nonrec t = t
 
-  let sexp_of_t t = [%sexp_of: int array] (dims t)
+  let sexp_of_t t = [%sexp_of: int iarray] (dims t)
 end
 
 module Private = struct

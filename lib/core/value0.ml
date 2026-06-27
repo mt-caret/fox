@@ -1,6 +1,5 @@
 open! Core
 
-(* TODO: switch to use iarrays once they land: https://github.com/ocaml/ocaml/pull/13097 *)
 type t =
   | T :
       { value : 'a
@@ -39,27 +38,22 @@ let coerce_exn
 let sexp_of_t (T { value; type_id; shape = { dims; type_ }; id = _ }) =
   let x = Type_equal.Id.to_sexp type_id value in
   match dims with
-  | [||] ->
+  | [::] ->
     [%message (Type_equal.Id.name type_id) ~_:(x : Sexp.t) ~_:(type_ : Type.Packed.t)]
-  | dims ->
+  | _ ->
     [%message
       (Type_equal.Id.name type_id)
         ~_:(x : Sexp.t)
-        (dims : int array)
+        (dims : int iarray)
         ~type_:(type_ : Type.Packed.t)]
 ;;
 
 (* Values carry a unique [id] so that an identical constant reused across a traced
    computation can be deduplicated by identity. *)
 module On_id = struct
-  module T = struct
-    type nonrec t = t [@@deriving sexp_of]
+  type nonrec t = t [@@deriving sexp_of]
 
-    let compare t1 t2 =
-      Comparable.lift [%compare: Id.t] t1 t2 ~f:(fun (T { id; _ }) -> id)
-    ;;
-  end
+  let compare t1 t2 = Comparable.lift [%compare: Id.t] t1 t2 ~f:(fun (T { id; _ }) -> id)
 
-  include T
-  include Comparable.Make_plain (T)
+  include functor Comparable.Make_plain
 end

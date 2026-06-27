@@ -1,23 +1,20 @@
 open! Core
 
 module Var = struct
-  module T = struct
-    type t =
-      { name : string
-      ; shape : Shape.t
-      }
-    [@@deriving compare, sexp, fields ~getters]
-  end
+  type t =
+    { name : string
+    ; shape : Shape.t
+    }
+  [@@deriving compare, sexp, fields ~getters]
 
-  include T
-  include Comparable.Make_plain (T)
+  include functor Comparable.Make_plain
 
   let type_id = Type_equal.Id.create ~name:"Var" [%sexp_of: t]
   let dims t = shape t |> Shape.dims
 
   let to_string { name; shape = { dims; type_ } } =
     let dims =
-      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:","
+      Iarray.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:","
     in
     let type_ = [%sexp_of: Type.Packed.t] type_ |> Sexp.to_string |> String.lowercase in
     [%string "%{name}[%{dims}]: %{type_}"]

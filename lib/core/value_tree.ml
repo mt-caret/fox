@@ -1,9 +1,5 @@
 open! Core
 
-(* [Def] hashes [int array]s of dims, which it treats as immutable; ppx_hash only hashes
-   arrays via the explicit "frozen" fold. *)
-let hash_fold_array = Hash.Builtin.hash_fold_array_frozen
-
 module General = struct
   type 'value t =
     | Leaf of 'value
@@ -47,12 +43,9 @@ let rec flatten : 'value General.t -> 'value list = function
 ;;
 
 module Def = struct
-  module T = struct
-    type t = int array General.t [@@deriving sexp, compare, hash, quickcheck]
-  end
+  type t = int iarray General.t [@@deriving sexp, compare, hash]
 
-  include T
-  include Hashable.Make (T)
+  include functor Hashable.Make
 
   let leaf ~dims = General.leaf dims
   let node = General.node
@@ -68,7 +61,7 @@ let rec unflatten' values ~(def : Def.t) ~sexp_of_value : _ General.t =
   | Leaf dims ->
     (match values with
      | [ value ] ->
-       [%test_result: int array] (Value0.dims value) ~expect:dims;
+       [%test_result: int iarray] (Value0.dims value) ~expect:dims;
        Leaf value
      | _ -> raise_s [%message "Expected singleton leaf value" (values : value list)])
   | Node children ->

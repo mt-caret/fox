@@ -40,11 +40,11 @@ type 'value t =
       }
   | Broadcast of
       { value : 'value
-      ; dims : int array
+      ; dims : int iarray
       }
   | Reshape of
       { value : 'value
-      ; dims : int array
+      ; dims : int iarray
       }
 [@@deriving sexp_of, variants]
 
@@ -123,12 +123,12 @@ let to_string t ~f =
     [%string "sum %{f value} dims=%{dims} keep_dims=%{keep_dims#Bool}"]
   | Broadcast { value; dims } ->
     let dims =
-      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+      Iarray.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
     in
     [%string "broadcast %{f value} dims=[%{dims}]"]
   | Reshape { value; dims } ->
     let dims =
-      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
+      Iarray.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:", "
     in
     [%string "reshape %{f value} dims=[%{dims}]"]
 ;;
@@ -146,7 +146,7 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
       , { dims = dims1; type_ = type1 }
       , { dims = dims2; type_ = type2 } ) ->
     let%map.Or_error () =
-      if [%equal: int array] dims1 dims2
+      if [%equal: int iarray] dims1 dims2
       then Ok ()
       else Or_error.error_s [%message "infer_dims: dims mismatch" ~op:(t : Shape.t t)]
     and () =
@@ -176,8 +176,8 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
     in
     let%map.Or_error dims =
       match dims1, dims2 with
-      | [| n; m |], [| m' |] -> if m <> m' then dim_mismatch () else Ok [| n |]
-      | [| n; m |], [| m'; k |] -> if m <> m' then dim_mismatch () else Ok [| n; k |]
+      | [: n; m :], [: m' :] -> if m <> m' then dim_mismatch () else Ok [: n :]
+      | [: n; m :], [: m'; k :] -> if m <> m' then dim_mismatch () else Ok [: n; k :]
       | _ ->
         Or_error.error_s
           [%message
@@ -187,7 +187,7 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
   | Transpose { dims; type_ } ->
     let%map.Or_error dims =
       match dims with
-      | [| n; k |] -> Ok [| k; n |]
+      | [: n; k :] -> Ok [: k; n :]
       | _ ->
         Or_error.error_s
           [%message
@@ -204,7 +204,7 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
     in
     let%map.Or_error dims =
       match dims_to_sum with
-      | `All -> Ok (if keep_dims then Array.map dims ~f:(fun _ -> 1) else [||])
+      | `All -> Ok (if keep_dims then Iarray.map dims ~f:(fun _ -> 1) else [::])
       | `Just dims_to_sum ->
         let%bind.Or_error () =
           if Nonempty_list.to_list dims_to_sum |> List.contains_dup ~compare:Int.compare
@@ -214,7 +214,7 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
                 "infer_dims: Sum: duplicate reduction dimension" ~op:(t : Shape.t t)]
           else Ok ()
         in
-        let dims_length = Array.length dims in
+        let dims_length = Iarray.length dims in
         (match
            Nonempty_list.for_all dims_to_sum ~f:(fun dim ->
              dim < dims_length || dims_length + dim >= 0)
@@ -232,57 +232,57 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
              in
              if keep_dims
              then
-               Array.mapi dims ~f:(fun index dim ->
+               Iarray.mapi dims ~f:(fun index dim ->
                  if Set.mem dims_to_sum index then 1 else dim)
              else
-               Array.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
+               Iarray.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
            in
            Ok dims)
     in
     { Shape.dims; type_ = T Float }
   | Broadcast { value = { dims = from_dims; type_ }; dims = to_dims } ->
     let%bind.Or_error () =
-      if Array.for_all to_dims ~f:Int.is_positive
+      if Iarray.for_all to_dims ~f:Int.is_positive
       then Ok ()
       else
         Or_error.error_s
           [%message "infer_dims: dims must be positive" ~op:(t : Shape.t t)]
     in
     let%bind.Or_error () =
-      if Array.length to_dims >= Array.length from_dims
+      if Iarray.length to_dims >= Iarray.length from_dims
       then Ok ()
       else
         Or_error.error_s
           [%message "infer_dims: can't broadcast to a larger rank" ~op:(t : Shape.t t)]
     in
     let%bind.Or_error () =
-      let dims_padding_length = Array.length to_dims - Array.length from_dims in
+      let dims_padding_length = Iarray.length to_dims - Iarray.length from_dims in
       let padded_from_dims =
-        Array.append (Array.create ~len:dims_padding_length 1) from_dims
+        Iarray.append (Iarray.init dims_padding_length ~f:(fun _ -> 1)) from_dims
       in
-      if Array.zip_exn padded_from_dims to_dims
-         |> Array.for_all ~f:(fun (from, to_) -> to_ = from || from = 1)
+      if Iarray.zip_exn padded_from_dims to_dims
+         |> Iarray.for_all ~f:(fun (from, to_) -> to_ = from || from = 1)
       then Ok ()
       else Or_error.error_s [%message "infer_dims: can't broadcast" ~op:(t : Shape.t t)]
     in
     Ok { Shape.dims = to_dims; type_ }
   | Reshape { value = { dims = from_dims; type_ }; dims = to_dims } ->
-    let from_dims_elements = Array.fold from_dims ~init:1 ~f:( * ) in
+    let from_dims_elements = Iarray.fold from_dims ~init:1 ~f:( * ) in
     let%map.Or_error dims =
-      match Array.count to_dims ~f:(fun dim -> dim = -1) with
+      match Iarray.count to_dims ~f:(fun dim -> dim = -1) with
       | 0 ->
-        let to_dims_elements = Array.fold to_dims ~init:1 ~f:( * ) in
+        let to_dims_elements = Iarray.fold to_dims ~init:1 ~f:( * ) in
         if from_dims_elements <> to_dims_elements
         then Or_error.error_s [%message "infer_dims: can't reshape" ~op:(t : Shape.t t)]
         else Ok to_dims
       | 1 ->
         let length_without_unknown_dim =
-          Array.filter to_dims ~f:(fun dim -> dim <> -1) |> Array.fold ~init:1 ~f:( * )
+          Iarray.filter to_dims ~f:(fun dim -> dim <> -1) |> Iarray.fold ~init:1 ~f:( * )
         in
         (match from_dims_elements % length_without_unknown_dim with
          | 0 ->
            let dims =
-             Array.map to_dims ~f:(fun dim ->
+             Iarray.map to_dims ~f:(fun dim ->
                if dim = -1 then from_dims_elements / length_without_unknown_dim else dim)
            in
            Ok dims
@@ -353,7 +353,7 @@ module Make_operators (M : sig
 
   let dims value = M.shape value |> Shape.dims
   let scale value float = O.(value * broadcast (M.of_float float) ~dims:(dims value))
-  let length value = Array.fold (dims value) ~init:1 ~f:( * )
+  let length value = Iarray.fold (dims value) ~init:1 ~f:( * )
 
   let mean ?dims:over_dims ?keep_dims value =
     let sum = sum ?dims:over_dims ?keep_dims value in

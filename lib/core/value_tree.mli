@@ -13,10 +13,10 @@ module Def : sig
   include Hashable.S with type t := t
 
   (* TODO: change [dims] to [shape] *)
-  val leaf : dims:int array -> t
+  val leaf : dims:int iarray -> t
   val node : t String.Map.t -> t
   val length : t -> int
-  val flatten : t -> int array list
+  val flatten : t -> int iarray list
 end
 
 val to_def : t -> Def.t
