@@ -128,12 +128,27 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
           ~builder:xla_builder
       , shape ))
   in
-  (* Hoisted constants are materialised once, up front, as XLA constant ops. *)
+  (* Hoisted constants are fed as runtime parameters (after the real parameters) rather
+     than baked in as XLA constants, so a single compiled executable serves any constant
+     values of the same structure. *)
+  let num_params = List.length expr.parameters in
+  let const_bindings =
+    Map.to_alist expr.consts
+    |> List.map ~f:(fun (var, value) -> var, Value.to_typed_tensor_exn Float value)
+  in
   let const_ops =
-    Map.map expr.consts ~f:(fun value ->
-      let tensor = Value.to_typed_tensor_exn Float value in
-      let op = tensor_to_xla_literal tensor |> Xla.Op.constant ~builder:xla_builder in
-      op, Tensor.Typed.shape tensor)
+    List.mapi const_bindings ~f:(fun i (var, tensor) ->
+      let shape = Tensor.Typed.shape tensor in
+      let op =
+        Xla.Op.parameter
+          (Expr.Var.name var)
+          ~id:(num_params + i)
+          ~ty:F64
+          ~dims:(Iarray.to_array (Shape.dims shape))
+          ~builder:xla_builder
+      in
+      var, (op, shape))
+    |> Expr.Var.Map.of_alist_exn
   in
   let out, out_shapes = xla_subcomp expr xla_params ~const_ops ~builder:xla_builder in
   let xla_client = Xla.Client.cpu () in
@@ -148,8 +163,10 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
   let xla_exe = Xla.Executable.compile xla_client computation in
   Staged.stage (fun inputs ->
     let inputs =
-      List.map inputs ~f:(fun tensor ->
-        tensor_to_xla_literal tensor |> Xla.Buffer.of_host_literal ~device:xla_device)
+      List.map
+        (inputs @ List.map const_bindings ~f:snd)
+        ~f:(fun tensor ->
+          tensor_to_xla_literal tensor |> Xla.Buffer.of_host_literal ~device:xla_device)
       |> List.to_array
     in
     let buffers = Xla.Executable.execute_b xla_exe inputs in
@@ -214,12 +231,12 @@ let%expect_test "jit'" =
   |> print_s;
   [%expect
     {|
-    HloModule xla_call.6, entry_computation_layout={(f64[])->(f64[])}
+    HloModule xla_call.6, entry_computation_layout={(f64[],f64[])->(f64[])}
 
-    ENTRY %xla_call.6 (v_0.1: f64[]) -> (f64[]) {
+    ENTRY %xla_call.6 (v_0.1: f64[], c_0.2: f64[]) -> (f64[]) {
       %v_0.1 = f64[] parameter(0)
-      %constant.2 = f64[] constant(3)
-      %add.3 = f64[] add(f64[] %v_0.1, f64[] %constant.2)
+      %c_0.2 = f64[] parameter(1)
+      %add.3 = f64[] add(f64[] %v_0.1, f64[] %c_0.2)
       %multiply.4 = f64[] multiply(f64[] %v_0.1, f64[] %add.3)
       ROOT %tuple.5 = (f64[]) tuple(f64[] %multiply.4)
     }
@@ -359,5 +376,33 @@ let%expect_test "jit caches the compiled executable per input structure" =
     {|
     ((a (Tensor 4 Float)) (b (Tensor 25 Float))
      (c (Tensor (1 4) (dims (2)) (type_ Float))))
+    |}]
+;;
+
+let%expect_test "distinct constants are fed as separate runtime parameters" =
+  (* [x * 3 + 5] hoists two constants, so the HLO has two const parameters. Each must
+     receive its own value: for x = 2 the result is 11, whereas feeding the constants in a
+     swapped order ([x * 5 + 3]) would give 13. *)
+  Staged.unstage
+    (jit'
+       ~print_hlo:true
+       ~f:(fun x -> Value.O.((x * Value.of_float 3.) + Value.of_float 5.))
+       ())
+    (Value.of_float 2.)
+  |> [%sexp_of: Value.t]
+  |> print_s;
+  [%expect
+    {|
+    HloModule xla_call.46, entry_computation_layout={(f64[],f64[],f64[])->(f64[])}
+
+    ENTRY %xla_call.46 (v_0.40: f64[], c_0.41: f64[], c_1.42: f64[]) -> (f64[]) {
+      %v_0.40 = f64[] parameter(0)
+      %c_0.41 = f64[] parameter(1)
+      %multiply.43 = f64[] multiply(f64[] %v_0.40, f64[] %c_0.41)
+      %c_1.42 = f64[] parameter(2)
+      %add.44 = f64[] add(f64[] %multiply.43, f64[] %c_1.42)
+      ROOT %tuple.45 = (f64[]) tuple(f64[] %add.44)
+    }
+    (Tensor 11 Float)
     |}]
 ;;
