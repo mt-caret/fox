@@ -96,8 +96,16 @@ let xla_subcomp
             value
             ~out_dims
             ~broadcast_dims:(Array.mapi in_dims ~f:(fun i _ -> padding_length + i))
-        | Reshape { value = value, _; dims } ->
-          Xla.Op.reshape value ~dims:(Iarray.to_array dims)
+        | Reshape { value = value, in_shape; dims } ->
+          (* [dims] may contain a -1 placeholder; XLA requires concrete dims (passing -1
+             aborts the process via a C++ CHECK), so resolve it the same way the eager
+             backend and [Op.infer_shape] do. *)
+          let out_dims =
+            Op.infer_shape_exn (Reshape { value = in_shape; dims })
+            |> Shape.dims
+            |> Iarray.to_array
+          in
+          Xla.Op.reshape value ~dims:out_dims
       in
       let shape = Op.map op ~f:snd |> Op.infer_shape_exn in
       Map.add_exn env ~key:var ~data:(xla_op, shape))
@@ -110,10 +118,11 @@ let xla_subcomp
   Xla.Op.tuple ops ~builder, shapes
 ;;
 
-let xla_builder = lazy (Xla.Builder.create ~name:"xla_call")
-
 let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
-  let xla_builder = Lazy.force xla_builder in
+  (* A fresh builder per compilation. An XLA builder records its first error and replays
+     it from every subsequent [build], so a single process-global builder would let one
+     failed compilation poison every later (even unrelated, valid) one. *)
+  let xla_builder = Xla.Builder.create ~name:"xla_call" in
   let xla_params =
     List.mapi expr.parameters ~f:(fun i { name; shape = { dims; type_ } as shape } ->
       (* TODO: right now we assume all parameters are single-element tensors. *)
@@ -133,6 +142,12 @@ let xla_callable ?(print_hlo = false) (expr : Value.t Expr.t) =
      constant values of the same structure. Their shapes come from the const vars, so
      compilation depends only on the structure, not the values. *)
   let num_params = List.length expr.parameters in
+  (* CR: bool constants are unsupported here - the parameter type is hard-coded to [F64]
+     (and [jit] below feeds const values via [to_typed_tensor_exn Float], and
+     [tensor_to_xla_literal] only handles float bigarrays). A jitted program that closes
+     over a bool constant therefore raises (a bool const compared against a float-typed
+     param gives "compare with different element types: pred vs f64"). Eager handles such
+     programs fine. See [test_robustness.ml] "jit: bool constant unsupported". *)
   let const_ops =
     Map.to_alist expr.consts
     |> List.mapi ~f:(fun i (var, _value) ->
@@ -260,15 +275,15 @@ let%expect_test "jit'" =
   |> print_s;
   [%expect
     {|
-    HloModule xla_call.13, entry_computation_layout={(f64[],f64[])->(f64[])}
+    HloModule xla_call.7, entry_computation_layout={(f64[],f64[])->(f64[])}
 
-    ENTRY %xla_call.13 (v_0.7: f64[], v_1.8: f64[]) -> (f64[]) {
-      %v_0.7 = f64[] parameter(0)
-      %sine.10 = f64[] sine(f64[] %v_0.7)
-      %v_1.8 = f64[] parameter(1)
-      %cosine.9 = f64[] cosine(f64[] %v_1.8)
-      %multiply.11 = f64[] multiply(f64[] %sine.10, f64[] %cosine.9)
-      ROOT %tuple.12 = (f64[]) tuple(f64[] %multiply.11)
+    ENTRY %xla_call.7 (v_0.1: f64[], v_1.2: f64[]) -> (f64[]) {
+      %v_0.1 = f64[] parameter(0)
+      %sine.4 = f64[] sine(f64[] %v_0.1)
+      %v_1.2 = f64[] parameter(1)
+      %cosine.3 = f64[] cosine(f64[] %v_1.2)
+      %multiply.5 = f64[] multiply(f64[] %sine.4, f64[] %cosine.3)
+      ROOT %tuple.6 = (f64[]) tuple(f64[] %multiply.5)
     }
     (Tensor -0.90019762973551742 Float)
     |}]
@@ -289,13 +304,13 @@ let%expect_test "jit and matmul" =
   |> print_s;
   [%expect
     {|
-    HloModule xla_call.18, entry_computation_layout={(f64[2,2]{1,0},f64[2,2]{1,0})->(f64[2,2]{1,0})}
+    HloModule xla_call.5, entry_computation_layout={(f64[2,2]{1,0},f64[2,2]{1,0})->(f64[2,2]{1,0})}
 
-    ENTRY %xla_call.18 (v_0.14: f64[2,2], v_1.15: f64[2,2]) -> (f64[2,2]) {
-      %v_0.14 = f64[2,2]{1,0} parameter(0)
-      %v_1.15 = f64[2,2]{1,0} parameter(1)
-      %dot.16 = f64[2,2]{1,0} dot(f64[2,2]{1,0} %v_0.14, f64[2,2]{1,0} %v_1.15), lhs_contracting_dims={1}, rhs_contracting_dims={0}
-      ROOT %tuple.17 = (f64[2,2]{1,0}) tuple(f64[2,2]{1,0} %dot.16)
+    ENTRY %xla_call.5 (v_0.1: f64[2,2], v_1.2: f64[2,2]) -> (f64[2,2]) {
+      %v_0.1 = f64[2,2]{1,0} parameter(0)
+      %v_1.2 = f64[2,2]{1,0} parameter(1)
+      %dot.3 = f64[2,2]{1,0} dot(f64[2,2]{1,0} %v_0.1, f64[2,2]{1,0} %v_1.2), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+      ROOT %tuple.4 = (f64[2,2]{1,0}) tuple(f64[2,2]{1,0} %dot.3)
     }
     (Tensor ((19 22) (43 50)) (dims (2 2)) (type_ Float))
     |}]
@@ -309,19 +324,19 @@ let%expect_test "jit and sum" =
   |> print_s;
   [%expect
     {|
-    HloModule xla_call.27, entry_computation_layout={(f64[2,2]{1,0})->(f64[])}
+    HloModule xla_call.9, entry_computation_layout={(f64[2,2]{1,0})->(f64[])}
 
-    %sum.21 (x.22: f64[], y.23: f64[]) -> f64[] {
-      %x.22 = f64[] parameter(0)
-      %y.23 = f64[] parameter(1)
-      ROOT %add.24 = f64[] add(f64[] %x.22, f64[] %y.23)
+    %sum.3 (x.4: f64[], y.5: f64[]) -> f64[] {
+      %x.4 = f64[] parameter(0)
+      %y.5 = f64[] parameter(1)
+      ROOT %add.6 = f64[] add(f64[] %x.4, f64[] %y.5)
     }
 
-    ENTRY %xla_call.27 (v_0.19: f64[2,2]) -> (f64[]) {
-      %v_0.19 = f64[2,2]{1,0} parameter(0)
-      %constant.20 = f64[] constant(0)
-      %reduce.25 = f64[] reduce(f64[2,2]{1,0} %v_0.19, f64[] %constant.20), dimensions={0,1}, to_apply=%sum.21
-      ROOT %tuple.26 = (f64[]) tuple(f64[] %reduce.25)
+    ENTRY %xla_call.9 (v_0.1: f64[2,2]) -> (f64[]) {
+      %v_0.1 = f64[2,2]{1,0} parameter(0)
+      %constant.2 = f64[] constant(0)
+      %reduce.7 = f64[] reduce(f64[2,2]{1,0} %v_0.1, f64[] %constant.2), dimensions={0,1}, to_apply=%sum.3
+      ROOT %tuple.8 = (f64[]) tuple(f64[] %reduce.7)
     }
     (Tensor 10 Float)
     |}]
@@ -335,12 +350,12 @@ let%expect_test "jit and broadcast" =
   |> print_s;
   [%expect
     {|
-    HloModule xla_call.31, entry_computation_layout={(f64[2,2]{1,0})->(f64[2,2,2]{2,1,0})}
+    HloModule xla_call.4, entry_computation_layout={(f64[2,2]{1,0})->(f64[2,2,2]{2,1,0})}
 
-    ENTRY %xla_call.31 (v_0.28: f64[2,2]) -> (f64[2,2,2]) {
-      %v_0.28 = f64[2,2]{1,0} parameter(0)
-      %broadcast.29 = f64[2,2,2]{2,1,0} broadcast(f64[2,2]{1,0} %v_0.28), dimensions={1,2}
-      ROOT %tuple.30 = (f64[2,2,2]{2,1,0}) tuple(f64[2,2,2]{2,1,0} %broadcast.29)
+    ENTRY %xla_call.4 (v_0.1: f64[2,2]) -> (f64[2,2,2]) {
+      %v_0.1 = f64[2,2]{1,0} parameter(0)
+      %broadcast.2 = f64[2,2,2]{2,1,0} broadcast(f64[2,2]{1,0} %v_0.1), dimensions={1,2}
+      ROOT %tuple.3 = (f64[2,2,2]{2,1,0}) tuple(f64[2,2,2]{2,1,0} %broadcast.2)
     }
     (Tensor (((1 2) (3 4)) ((1 2) (3 4))) (dims (2 2 2)) (type_ Float))
     |}]
@@ -352,12 +367,12 @@ let%expect_test "jit caches the compiled executable per input structure" =
   let a = jitted (Value.of_float 2.) in
   [%expect
     {|
-    HloModule xla_call.35, entry_computation_layout={(f64[])->(f64[])}
+    HloModule xla_call.4, entry_computation_layout={(f64[])->(f64[])}
 
-    ENTRY %xla_call.35 (v_0.32: f64[]) -> (f64[]) {
-      %v_0.32 = f64[] parameter(0)
-      %multiply.33 = f64[] multiply(f64[] %v_0.32, f64[] %v_0.32)
-      ROOT %tuple.34 = (f64[]) tuple(f64[] %multiply.33)
+    ENTRY %xla_call.4 (v_0.1: f64[]) -> (f64[]) {
+      %v_0.1 = f64[] parameter(0)
+      %multiply.2 = f64[] multiply(f64[] %v_0.1, f64[] %v_0.1)
+      ROOT %tuple.3 = (f64[]) tuple(f64[] %multiply.2)
     }
     |}];
   (* A second call with the same input structure reuses the compiled executable - nothing
@@ -368,12 +383,12 @@ let%expect_test "jit caches the compiled executable per input structure" =
   let c = jitted (Value.of_tensor (Tensor.of_list Float [ 1.; 2. ])) in
   [%expect
     {|
-    HloModule xla_call.39, entry_computation_layout={(f64[2]{0})->(f64[2]{0})}
+    HloModule xla_call.4, entry_computation_layout={(f64[2]{0})->(f64[2]{0})}
 
-    ENTRY %xla_call.39 (v_0.36: f64[2]) -> (f64[2]) {
-      %v_0.36 = f64[2]{0} parameter(0)
-      %multiply.37 = f64[2]{0} multiply(f64[2]{0} %v_0.36, f64[2]{0} %v_0.36)
-      ROOT %tuple.38 = (f64[2]{0}) tuple(f64[2]{0} %multiply.37)
+    ENTRY %xla_call.4 (v_0.1: f64[2]) -> (f64[2]) {
+      %v_0.1 = f64[2]{0} parameter(0)
+      %multiply.2 = f64[2]{0} multiply(f64[2]{0} %v_0.1, f64[2]{0} %v_0.1)
+      ROOT %tuple.3 = (f64[2]{0}) tuple(f64[2]{0} %multiply.2)
     }
     |}];
   print_s [%message (a : Value.t) (b : Value.t) (c : Value.t)];
@@ -398,15 +413,15 @@ let%expect_test "distinct constants are fed as separate runtime parameters" =
   |> print_s;
   [%expect
     {|
-    HloModule xla_call.46, entry_computation_layout={(f64[],f64[],f64[])->(f64[])}
+    HloModule xla_call.7, entry_computation_layout={(f64[],f64[],f64[])->(f64[])}
 
-    ENTRY %xla_call.46 (v_0.40: f64[], c_0.41: f64[], c_1.42: f64[]) -> (f64[]) {
-      %v_0.40 = f64[] parameter(0)
-      %c_0.41 = f64[] parameter(1)
-      %multiply.43 = f64[] multiply(f64[] %v_0.40, f64[] %c_0.41)
-      %c_1.42 = f64[] parameter(2)
-      %add.44 = f64[] add(f64[] %multiply.43, f64[] %c_1.42)
-      ROOT %tuple.45 = (f64[]) tuple(f64[] %add.44)
+    ENTRY %xla_call.7 (v_0.1: f64[], c_0.2: f64[], c_1.3: f64[]) -> (f64[]) {
+      %v_0.1 = f64[] parameter(0)
+      %c_0.2 = f64[] parameter(1)
+      %multiply.4 = f64[] multiply(f64[] %v_0.1, f64[] %c_0.2)
+      %c_1.3 = f64[] parameter(2)
+      %add.5 = f64[] add(f64[] %multiply.4, f64[] %c_1.3)
+      ROOT %tuple.6 = (f64[]) tuple(f64[] %add.5)
     }
     (Tensor 11 Float)
     |}]
@@ -421,13 +436,13 @@ let%expect_test "one executable serves a closure whose captured constant changes
   let r1 = jitted (Value.of_float 2.) in
   [%expect
     {|
-    HloModule xla_call.51, entry_computation_layout={(f64[],f64[])->(f64[])}
+    HloModule xla_call.5, entry_computation_layout={(f64[],f64[])->(f64[])}
 
-    ENTRY %xla_call.51 (v_0.47: f64[], c_0.48: f64[]) -> (f64[]) {
-      %v_0.47 = f64[] parameter(0)
-      %c_0.48 = f64[] parameter(1)
-      %multiply.49 = f64[] multiply(f64[] %v_0.47, f64[] %c_0.48)
-      ROOT %tuple.50 = (f64[]) tuple(f64[] %multiply.49)
+    ENTRY %xla_call.5 (v_0.1: f64[], c_0.2: f64[]) -> (f64[]) {
+      %v_0.1 = f64[] parameter(0)
+      %c_0.2 = f64[] parameter(1)
+      %multiply.3 = f64[] multiply(f64[] %v_0.1, f64[] %c_0.2)
+      ROOT %tuple.4 = (f64[]) tuple(f64[] %multiply.3)
     }
     |}];
   (* The captured constant changes, but the structure does not: the executable is reused

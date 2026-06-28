@@ -355,6 +355,16 @@ let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
   List.map args ~f:(read_gradient ~ct_env)
 ;;
 
+(* CR: [vjp] (hence [grad]) raises when an output does not depend on the input. The traced
+   tangent program keeps only the unknown (input-dependent) outputs as [return_vals], so:
+   (a) if *every* output is constant, [return_vals] is empty and [Expr]'s [Nonempty_list]
+       constructor raises ("empty list"); and (b) for a tuple/multi output with a constant
+       component, [f_vjp] zips all cotangents against the shorter [return_vals] and raises
+       a length mismatch. Forward mode ([jvp]/[derivative]) already yields a zero tangent
+       here, so the correct result is a zero gradient (cf. JAX). A proper fix needs the
+       cotangents routed to only the unknown outputs (and the all-constant case
+       short-circuited to zeros), which the [Nonempty_list] return type makes invasive.
+       See [test_robustness.ml] "grad of an output independent of the input". *)
 let vjp
   (type in_ out)
   (module In : Treeable_intf.S with type t = in_)

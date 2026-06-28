@@ -90,7 +90,46 @@ Each is a lead to investigate, not a confirmed bug:
 
 ## Findings (append as you go)
 
-### Bugs found & fixed
+### Bugs found by the multi-agent sweep
+
+A parallel sweep (7 isolated agents, one per op/transform class) surfaced these, each
+independently reproduced on the post-fix tree before acting:
+
+- **BUG-4 (fixed): a failed XLA compilation poisoned all later ones.** `fox_jit.ml` used one
+  process-global `lazy` `Xla.Builder`. An XLA builder records its first error and replays it
+  from every subsequent `build`, so a single failing compile (e.g. a bool-const program)
+  made every later — even unrelated, valid — `jit'` raise a stale error. Fixed by creating a
+  fresh builder per compilation in `xla_callable`. Regression: `test_robustness.ml` "a failed
+  compilation does not poison later compilations". (Side effect: HLO op-ids are now numbered
+  per-compile, so the `fox_jit.ml` HLO expect tests were re-promoted — semantically identical.)
+- **BUG-5 (fixed): `reshape` with a `-1` placeholder aborted the process under JIT.**
+  `fox_jit.ml` forwarded the raw dims (incl. `-1`) to `Xla.Op.reshape`, hitting a C++ CHECK
+  → SIGABRT (uncatchable), while eager resolves `-1` fine. Fixed by resolving the placeholder
+  via `Op.infer_shape_exn` before calling XLA. Regression in `test_robustness.ml`.
+- **BUG-6 (fixed): `Op.infer_shape` accepted sign-aliased duplicate sum dims.** The duplicate
+  check ran on the raw dims, before negative-index normalization, so `sum ~dims:(`Just [0;-3])`
+  on a rank-3 tensor (0 and -3 are the same axis) was accepted with a wrong shape (the
+  positive duplicate `[0;0]` was already rejected). Eager then double-reduced and tripped the
+  internal shape-consistency check; XLA raised "Duplicate reduction dimension". Fixed by
+  normalizing before the dedup check in `op.ml`. Regression in `test_op.ml`.
+
+### Limitations documented (CR note at the code + tracking test in `test_robustness.ml`)
+
+- **Bool constants are unsupported under JIT.** `fox_jit.ml` hard-codes constant parameters
+  to `F64` and the literal conversion is float-only, so a jitted program closing over a bool
+  constant raises (eager handles it). Risky to fix (touches the float-only literal/buffer
+  path); CR note at `fox_jit.ml`.
+- **`grad`/`vjp` raises when an output does not depend on the input.** The traced tangent
+  program keeps only input-dependent outputs, so an all-constant output yields an empty
+  `return_vals` (and `Expr` requires a `Nonempty_list`); a tuple with a constant component
+  hits a cotangent/return-val length mismatch. Forward mode already yields a zero tangent, so
+  the correct answer is a zero gradient. The `Nonempty_list` return type makes a proper fix
+  invasive; CR note at `handler.ml`.
+- The sweep's matmul agent flagged the matmul-with-vector gradient as still broken, but that
+  was a stale-worktree false positive — it is fixed (see BUG-2) and verified across eager and
+  finite differences.
+
+### Bugs found & fixed (initial pass)
 
 - **BUG-1 (fixed): `Op.infer_shape` Sum reduction-dim bounds check was a no-op.**
   In `op.ml`, the in-bounds test was `dim < dims_length || dims_length + dim >= 0`. With
