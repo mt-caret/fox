@@ -60,6 +60,20 @@ let%expect_test "sum: dims, keep_dims, duplicates" =
        (Sum (value ((dims (2 3)) (type_ Float))) (dims (Just (0 0)))
         (keep_dims false)))))
     |}];
+  (* Sign-aliased duplicates (same axis written positive and negative) are duplicates
+     too - the dedup runs after negative-index normalization. *)
+  infer (Sum { value = f [: 2; 3; 4 :]; dims = `Just [ 0; -3 ]; keep_dims = false });
+  [%expect
+    {|
+    (Error
+     ("infer_dims: Sum: duplicate reduction dimension"
+      (op
+       (Sum (value ((dims (2 3 4)) (type_ Float))) (dims (Just (0 -3)))
+        (keep_dims false)))))
+    |}];
+  (* A distinct positive/negative mix is fine. *)
+  infer (Sum { value = f [: 2; 3; 4 :]; dims = `Just [ 0; -1 ]; keep_dims = false });
+  [%expect {| (Ok ((dims (3)) (type_ Float))) |}];
   infer (Sum { value = f [: 2; 3 :]; dims = `All; keep_dims = false });
   [%expect {| (Ok ((dims ()) (type_ Float))) |}];
   (* Sum of a bool tensor is unsupported. *)
