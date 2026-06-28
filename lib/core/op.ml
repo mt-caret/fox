@@ -217,7 +217,7 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
         let dims_length = Iarray.length dims in
         (match
            Nonempty_list.for_all dims_to_sum ~f:(fun dim ->
-             dim < dims_length || dims_length + dim >= 0)
+             dim < dims_length && dims_length + dim >= 0)
          with
          | false ->
            Or_error.error_s
