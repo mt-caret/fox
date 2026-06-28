@@ -38,9 +38,7 @@ let%expect_test "linear regression" =
     v_6[]: float = div v_4 v_5;
     ( v_6 )
     |}];
-  let _y, f_jvp =
-    Eval.handle ~f:(fun () -> vjp' ~f:loss ~primal:(Value.of_tensor !weights))
-  in
+  let _y, f_jvp = eval ~f:(fun () -> vjp' ~f:loss ~primal:(Value.of_tensor !weights)) in
   let expr = build_expr' ~f:f_jvp ~in_dims:[::] in
   Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
   [%expect
@@ -65,12 +63,11 @@ let%expect_test "linear regression" =
     |}];
   for i = 0 to num_iters do
     let grads =
-      Eval.handle ~f:(fun () -> loss_grad (Value.of_tensor !weights))
-      |> Value.to_tensor_exn
+      eval ~f:(fun () -> loss_grad (Value.of_tensor !weights)) |> Value.to_tensor_exn
     in
     weights := Tensor.sub !weights (Tensor.scale grads learning_rate);
     let loss =
-      Eval.handle ~f:(fun () -> loss (Value.of_tensor !weights)) |> Value.to_float_exn
+      eval ~f:(fun () -> loss (Value.of_tensor !weights)) |> Value.to_float_exn
     in
     if i mod 10 = 0 then print_s [%message "" (i : int) (loss : float)]
   done;

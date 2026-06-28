@@ -204,7 +204,7 @@ let command =
       in
       let loss, grad = train_step (!model, (x, y)) in
       let average_grad_l2_norm =
-        Eval.handle ~f:(fun () ->
+        eval ~f:(fun () ->
           let grad_norms =
             Model.map grad ~f:(fun x -> Value.mean Value.O.(x * x)) |> Model.to_list
           in
@@ -214,7 +214,7 @@ let command =
       if i mod 100 = 0 then print_dataset_loss ();
       print_s [%message (loss : Value.t) (average_grad_l2_norm : Value.t)];
       model
-      := Eval.handle ~f:(fun () ->
+      := eval ~f:(fun () ->
            Model.map2 !model grad ~f:(fun a b ->
              Value.O.(a - Value.scale b learning_rate)))
     done;

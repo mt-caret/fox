@@ -226,6 +226,7 @@ let jit
 ;;
 
 let jit' ?print_hlo ~f () = jit (module Value) (module Value) ?print_hlo ~f ()
+let foo x = Value.O.(x * (x + Value.of_float 3.))
 
 let%expect_test "jit'" =
   (* Suppresses noisy XLA log message *)
