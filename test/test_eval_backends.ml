@@ -364,6 +364,95 @@ let%expect_test "eval expr vs xla" =
           (Value.to_tensor_exn xla_result)))
 ;;
 
+(* torch's transcendental ops (exp/sin/...) and its reductions differ from OCaml's libm
+   and sequential reductions by a few ULPs. The eager backend's [Tensor.allclose] uses
+   [Float.robustly_compare], whose tolerance is absolute (~1e-7), so at large magnitudes
+   it demands near-bit-exactness and rejects those ULP-level differences. Compare with a
+   relative tolerance instead (NaNs and infinities still must match exactly). *)
+let tensors_close a b =
+  [%equal: int iarray] (Tensor.dims a) (Tensor.dims b)
+  &&
+  match Tensor.type_ a, Tensor.type_ b with
+  | T Bool, T Bool -> Tensor.allclose a b
+  | T Float, T Float ->
+    let n = Tensor.length a in
+    let a = Tensor.reshape a ~dims:[: n :] in
+    let b = Tensor.reshape b ~dims:[: n :] in
+    List.range 0 n
+    |> List.for_all ~f:(fun i ->
+      let x = Tensor.get_exn Float a [: i :] in
+      let y = Tensor.get_exn Float b [: i :] in
+      Float.equal x y
+      || (Float.is_nan x && Float.is_nan y)
+      || Float.( <= )
+           (Float.abs (x -. y))
+           (1e-8 +. (1e-5 *. Float.max (Float.abs x) (Float.abs y))))
+  | _, _ -> false
+;;
+
+let%expect_test "eval expr vs torch" =
+  Quickcheck.test
+    (fun_generator ~op_nums:1)
+    ~trials:300
+    ~sexp_of:(fun (tensor, expr) ->
+      [%sexp
+        { tensor : Tensor.t
+        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+        }])
+    ~f:(fun (tensor, expr) ->
+      let f value = eval_expr' expr value in
+      let value = Value.of_tensor tensor in
+      let eval_result = eval ~f:(fun () -> f value) in
+      let torch_result = Fox_torch.Pytorch.handle ~f:(fun () -> f value) in
+      assert (
+        tensors_close (Value.to_tensor_exn eval_result) (Value.to_tensor_exn torch_result)))
+;;
+
+(* A deterministic check that [Bool] tensors round-trip through the torch backend: a
+   comparison produces a [Bool] which is then fed back into [eq]/[reshape]/[broadcast]
+   (exercising [Pytorch.of_tensor]'s bool path, i.e. fox-bool -> torch), and the result is
+   compared against the eager backend. [v > -v] is true exactly where [v] is positive. *)
+let%expect_test "torch backend round-trips bool intermediates" =
+  let input = Tensor.of_list2_exn Float [ [ 1.; -2. ]; [ 3.; -4. ] ] in
+  let run f =
+    let value = Value.of_tensor input in
+    let eager = eval ~f:(fun () -> f value) |> Value.to_tensor_exn in
+    let torch = Fox_torch.Pytorch.handle ~f:(fun () -> f value) |> Value.to_tensor_exn in
+    assert (tensors_close eager torch);
+    print_s [%sexp (eager : Tensor.t)]
+  in
+  let positive value = Value.O.(value > Value.neg value) in
+  run (fun v -> Value.O.(positive v = positive v));
+  [%expect {| ((true true) (true true)) |}];
+  run (fun v -> positive v |> Value.reshape ~dims:[: 4 :]);
+  [%expect {| (true false true false) |}];
+  run (fun v -> positive v |> Value.broadcast ~dims:[: 1; 2; 2 :]);
+  [%expect {| (((true false) (true false))) |}]
+;;
+
+(* A deterministic check over the structurally non-trivial ops (matmul, transpose, and the
+   reductions with [`Just]/negative dims/[keep_dims]) so coverage of these does not rely
+   on quickcheck's random op draws. Each result is also cross-checked against the eager
+   backend. *)
+let%expect_test "torch backend matches eager on fixed matmul/transpose/sum" =
+  let a = Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  let run f =
+    let value = Value.of_tensor a in
+    let eager = eval ~f:(fun () -> f value) |> Value.to_tensor_exn in
+    let torch = Fox_torch.Pytorch.handle ~f:(fun () -> f value) |> Value.to_tensor_exn in
+    assert (tensors_close eager torch);
+    print_s [%sexp (eager : Tensor.t)]
+  in
+  run (fun v -> Value.matmul v (Value.transpose v));
+  [%expect {| ((5 11) (11 25)) |}];
+  run (fun v -> Value.sum v ~dims:(`Just [ 0 ]) ~keep_dims:false);
+  [%expect {| (4 6) |}];
+  run (fun v -> Value.sum v ~dims:(`Just [ -1 ]) ~keep_dims:true);
+  [%expect {| ((3) (7)) |}];
+  run (fun v -> Value.mean v ~keep_dims:false);
+  [%expect {| 2.5 |}]
+;;
+
 let%expect_test "grad+jit vs grad+eval" =
   let test ~f ~x =
     eval ~f:(fun () -> f x) |> [%sexp_of: Value.t] |> print_s;

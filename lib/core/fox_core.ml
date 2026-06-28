@@ -1,6 +1,8 @@
 open! Core
 module Expr = Expr
+module Fox_effect = Fox_effect
 module Op = Op
+module Operators_intf = Operators_intf
 module Shape = Shape
 module Tensor = Tensor
 module Treeable = Treeable

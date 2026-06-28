@@ -19,6 +19,7 @@ depends: [
   "base_bigstring" {= "v0.18~preview.130.91+190"}
   "base_quickcheck" {= "v0.18~preview.130.91+190"}
   "basement" {= "v0.18~preview.130.91+190"}
+  "bigarray-compat" {= "1.1.0"}
   "bin_prot" {= "v0.18~preview.130.91+190"}
   "camlp-streams" {= "5.0.1"}
   "camlzip" {= "1.14"}
@@ -34,11 +35,9 @@ depends: [
   "core" {= "v0.18~preview.130.91+190"}
   "core_kernel" {= "v0.18~preview.130.91+190"}
   "core_unix" {= "v0.18~preview.130.91+190"}
-  "cppo" {= "1.8.0" & with-doc}
-  "crunch" {= "4.0.0" & with-doc}
   "csexp" {= "1.5.2"}
-  "ctypes" {= "0.24.0+ox"}
-  "ctypes-foreign" {= "0.24.0+ox"}
+  "ctypes" {= "0.23.0+ox"}
+  "ctypes-foreign" {= "0.23.0+ox"}
   "dune" {= "3.22.2+ox"}
   "dune-build-info" {= "3.20.2"}
   "dune-configurator" {= "3.22.2+ox"}
@@ -46,11 +45,12 @@ depends: [
   "expect_test_helpers_core" {= "v0.18~preview.130.91+190"}
   "fieldslib" {= "v0.18~preview.130.91+190"}
   "fix" {= "20250919"}
-  "fmt" {= "0.11.0" & with-doc}
+  "float_array" {= "v0.18~preview.130.91+190"}
   "fpath" {= "0.7.3"}
   "int_repr" {= "v0.18~preview.130.91+190"}
   "integers" {= "0.8.0"}
   "jane-street-headers" {= "v0.18~preview.130.91+190"}
+  "janestreet_crc" {= "v0.18~preview.130.91+190"}
   "jst-config" {= "v0.18~preview.130.91+190"}
   "menhir" {= "20260209"}
   "menhirCST" {= "20260209"}
@@ -70,7 +70,6 @@ depends: [
   "ocamlformat" {= "0.26.2+ox1"}
   "ocamlformat-lib" {= "0.26.2+ox1"}
   "ocp-indent" {= "1.9.0"}
-  "odoc" {= "3.2.1" & with-doc}
   "odoc-parser" {= "3.2.1"}
   "oxcaml" {= "latest"}
   "oxcaml-alcotest" {= "guard"}
@@ -148,6 +147,8 @@ depends: [
   "ppx_base" {= "v0.18~preview.130.91+190"}
   "ppx_bench" {= "v0.18~preview.130.91+190"}
   "ppx_bin_prot" {= "v0.18~preview.130.91+190"}
+  "ppx_box" {= "v0.18~preview.130.91+190"}
+  "ppx_c_bindings" {= "v0.18~preview.130.91+190"}
   "ppx_cold" {= "v0.18~preview.130.91+190"}
   "ppx_compare" {= "v0.18~preview.130.91+190"}
   "ppx_custom_printf" {= "v0.18~preview.130.91+190"}
@@ -159,6 +160,7 @@ depends: [
   "ppx_expect" {= "v0.18~preview.130.91+190"}
   "ppx_fields_conv" {= "v0.18~preview.130.91+190"}
   "ppx_fixed_literal" {= "v0.18~preview.130.91+190"}
+  "ppx_for_loop" {= "v0.18~preview.130.91+190"}
   "ppx_fuelproof" {= "v0.18~preview.130.91+190"}
   "ppx_globalize" {= "v0.18~preview.130.91+190"}
   "ppx_hash" {= "v0.18~preview.130.91+190"}
@@ -193,7 +195,6 @@ depends: [
   "ppxlib" {= "0.33.0+ox1"}
   "ppxlib_ast" {= "0.33.0+ox1"}
   "ppxlib_jane" {= "v0.18~preview.130.91+190"}
-  "ptime" {= "1.2.0" & with-doc}
   "re" {= "1.14.0+ox"}
   "result" {= "1.5"}
   "seq" {= "base"}
@@ -208,8 +209,9 @@ depends: [
   "string_dict" {= "v0.18~preview.130.91+190"}
   "time_now" {= "v0.18~preview.130.91+190"}
   "topkg" {= "1.1.1+ox"}
+  "torch" {= "v0.18~preview.130.91+190"}
   "typerep" {= "v0.18~preview.130.91+190"}
-  "tyxml" {= "4.6.0" & with-doc}
+  "unboxed" {= "v0.18~preview.130.91+190"}
   "unique" {= "v0.18~preview.130.91+190"}
   "univ_map" {= "v0.18~preview.130.91+190"}
   "uopt" {= "v0.18~preview.130.91+190"}
@@ -217,6 +219,7 @@ depends: [
   "uuseg" {= "17.0.0"}
   "uutf" {= "1.0.4+ox"}
   "variantslib" {= "v0.18~preview.130.91+190"}
+  "vec" {= "v0.18~preview.130.91+190"}
   "xla" {= "dev"}
   "yojson" {= "2.2.2+ox"}
 ]

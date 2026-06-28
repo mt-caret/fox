@@ -51,6 +51,18 @@ jobs:
           tar -xzf xla_extension-x86_64-linux-gnu-cpu.tar.gz
           echo "XLA_EXTENSION_DIR=$PWD/xla_extension" >> "$GITHUB_ENV"
 
+      # The torch backend (fox_torch) needs libtorch at *opam install* time (torch's C++
+      # stubs) and at runtime (the test binary's baked rpath). The opam `libtorch` package is
+      # stale (<= 2.2.1); fetch a CPU libtorch 2.7.1 matching opam-overlay/'s patched torch and
+      # export LIBTORCH (discover.ml checks it first). Re-downloaded every run to a stable path
+      # so the rpath stays valid even when the opam switch is restored from cache.
+      - name: Download libtorch (CPU)
+        run: |
+          wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip" -O libtorch.zip
+          unzip -q libtorch.zip
+          rm -f libtorch.zip
+          echo "LIBTORCH=$PWD/libtorch" >> "$GITHUB_ENV"
+
       # The compiled dependencies live in the local _opam switch, not ~/.opam; caching only
       # ~/.opam would leave every run recompiling the whole tree. Both paths are cached,
       # keyed on the lockfile, and refreshed automatically in the post-job step.
@@ -60,9 +72,17 @@ jobs:
           path: |
             ~/.opam
             _opam
-          key: opam-${{ hashFiles('fox.opam.locked') }}
+          key: opam-${{ hashFiles('fox.opam.locked', 'opam-overlay/**') }}
           restore-keys: |
             opam-
+
+      # opam-overlay/ provides torch.v0.18~preview.130.91+190 patched for CPU libtorch 2.7.x
+      # (CUDA pieces stubbed; see lib/torch/README.md). It must out-rank the `oxcaml` repo so
+      # its patched torch wins for that shared version. Re-added each run to be cache-robust.
+      - name: Register torch CPU overlay
+        run: |
+          opam repo remove fox-overlay 2>/dev/null || true
+          opam repo add fox-overlay "$PWD/opam-overlay" --rank 1
 
       - name: Install opam dependencies
         run: opam install . --deps-only --with-test --locked

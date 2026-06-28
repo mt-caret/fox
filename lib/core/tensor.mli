@@ -80,6 +80,10 @@ module Private : sig
     :  float Typed.t
     -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
 
+  val to_char_bigarray
+    :  bool Typed.t
+    -> (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Genarray.t
+
   val of_float_bigarray
     :  (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
     -> float Typed.t

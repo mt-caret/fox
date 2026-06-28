@@ -1,0 +1,61 @@
+# Jane Street's ocaml-torch (the only torch that builds under the OxCaml compiler), patched
+# to build CPU-only against libtorch 2.7.x without a CUDA toolkit. This overlay is identical
+# to the `ox` opam-repository's torch package except for `patches:` (see files/torch-cpu.patch
+# and lib/torch/README.md for the rationale). Provide a libtorch 2.7.x at
+# $OPAM_SWITCH_PREFIX/lib/libtorch (or via the LIBTORCH env var) before installing.
+opam-version: "2.0"
+maintainer: "Jane Street developers"
+authors: ["Jane Street Group, LLC"]
+homepage: "https://github.com/janestreet/torch"
+bug-reports: "https://github.com/janestreet/torch/issues"
+dev-repo: "git+https://github.com/janestreet/torch.git"
+doc: "https://ocaml.janestreet.com/ocaml-core/latest/doc/torch/index.html"
+license: "MIT"
+x-maintenance-intent: ["(latest)"]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]
+depends: [
+  "ocaml"               {>= "5.1.0"}
+  "base"                {= "v0.18~preview.130.91+190"}
+  "core"                {= "v0.18~preview.130.91+190"}
+  "core_unix"           {= "v0.18~preview.130.91+190"}
+  "ppx_bench"           {= "v0.18~preview.130.91+190"}
+  "ppx_c_bindings"      {= "v0.18~preview.130.91+190"}
+  "ppx_expect"          {= "v0.18~preview.130.91+190"}
+  "ppx_inline_test"     {= "v0.18~preview.130.91+190"}
+  "ppx_jane"            {= "v0.18~preview.130.91+190"}
+  "ppx_let"             {= "v0.18~preview.130.91+190"}
+  "ppx_module_timer"    {= "v0.18~preview.130.91+190"}
+  "ppx_string"          {= "v0.18~preview.130.91+190"}
+  "stdio"               {= "v0.18~preview.130.91+190"}
+  "vec"                 {= "v0.18~preview.130.91+190"}
+  "ctypes"              {>= "0.23.0"}
+  "ctypes-foreign"      {>= "0.23.0"}
+  "dune"                {>= "3.17.0"}
+  "dune-configurator"
+  "ocaml-compiler-libs" {>= "v0.17.0"}
+]
+depopts: ["libtorch"]
+available: arch != "arm32" & arch != "x86_32"
+conflicts: [
+  # Patched for the libtorch 2.7.x ABI / headers (upstream targets 2.3.x).
+  "libtorch" {< "2.7.0" | >= "2.8.0"}
+  "oxcaml-compiler" {< "5.2.0minus31"}
+]
+synopsis: "Torch bindings for OCaml (CPU-only patch for libtorch 2.7.x under OxCaml)"
+description: """
+The ocaml-torch project provides some OCaml bindings for the Torch library.
+This brings to OCaml NumPy-like tensor computations with GPU acceleration and
+tape-based automatic differentiation.
+"""
+patches: ["torch-cpu.patch"]
+extra-files: [
+  ["torch-cpu.patch" "sha256=bf78929f1575dffb4a6abb1beeb7b44eb3c668aa67966d482235c8f53e2b13ef"]
+]
+url {
+  src:
+    "https://github.com/janestreet/torch/archive/27f9f3af1ac3fc4331db742c3b4633cf0d5fdaad.tar.gz"
+  checksum:
+    "sha256=bcab21c3b2b7dabf6ae2077fa352275a11b9ee2ad34dbe0dc61e46ded5bde2fd"
+}
