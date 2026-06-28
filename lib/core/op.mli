@@ -9,7 +9,7 @@ module Unary : sig
     | Exp
     | Log
     | Sigmoid
-  [@@deriving sexp, enumerate]
+  [@@deriving sexp, enumerate, compare, hash]
 end
 
 module Binary : sig
@@ -21,7 +21,7 @@ module Binary : sig
     | Eq
     | Gt
     | Lt
-  [@@deriving sexp, enumerate]
+  [@@deriving sexp, enumerate, compare, hash]
 end
 
 type 'value t =
@@ -36,13 +36,13 @@ type 'value t =
       }
   | Broadcast of
       { value : 'value
-      ; dims : int array
+      ; dims : int iarray
       }
   | Reshape of
       { value : 'value
-      ; dims : int array
+      ; dims : int iarray
       }
-[@@deriving sexp_of]
+[@@deriving sexp_of, compare, hash]
 
 val map : 'a t -> f:('a -> 'b) -> 'b t
 val to_list : 'a t -> 'a list

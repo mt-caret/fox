@@ -15,7 +15,7 @@ let of_typed_tensor (type a) (tensor : a Tensor.Typed.t) =
   let type_id =
     Tensor.Typed.type_ tensor |> Type.type_equal_id |> Tensor.Typed.type_equal_id
   in
-  T { value = tensor; type_id; shape = Tensor.Typed.shape tensor }
+  create ~value:tensor ~type_id ~shape:(Tensor.Typed.shape tensor)
 ;;
 
 let of_tensor (Tensor.T tensor) = of_typed_tensor tensor
@@ -32,6 +32,7 @@ let to_tensor_exn t =
 
 let of_float x = of_typed_tensor (Tensor.Typed.of_lit Float x)
 let to_float_exn t : float = to_typed_tensor_exn Float t |> Tensor.Typed.item
+let to_string t = [%sexp_of: t] t |> Sexp.to_string
 
 include Op.Make_operators (struct
     type nonrec t = t [@@deriving sexp_of]

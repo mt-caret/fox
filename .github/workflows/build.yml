@@ -1,0 +1,77 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    # xla binds a prebuilt XLA extension blob; only the linux x86_64 archive is
+    # downloaded below, so this job is Linux-only (macOS would need the darwin archive).
+    runs-on: ubuntu-latest
+
+    env:
+      TZ: UTC
+
+    steps:
+      # The OxCaml + Jane Street tree is large and overflows the ~14 GB free on a stock
+      # ubuntu-latest runner; strip preinstalled tooling we don't need to recover ~30 GB.
+      # tool-cache:false keeps the hosted tool cache (used by setup-ocaml).
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set-up OxCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ocaml-variants.5.2.0+ox
+          dune-cache: true
+          opam-pin: false
+          opam-repositories: |
+            oxcaml: "git+https://github.com/oxcaml/opam-repository.git"
+            default: "git+https://github.com/ocaml/opam-repository.git"
+
+      # xla's C++ stubs need the XLA extension headers at *opam install* time (not just at
+      # dune build time), so fetch the blob and export XLA_EXTENSION_DIR before installing.
+      - name: Download XLA extension
+        run: |
+          wget -q https://github.com/elixir-nx/xla/releases/download/v0.4.4/xla_extension-x86_64-linux-gnu-cpu.tar.gz
+          tar -xzf xla_extension-x86_64-linux-gnu-cpu.tar.gz
+          echo "XLA_EXTENSION_DIR=$PWD/xla_extension" >> "$GITHUB_ENV"
+
+      # The compiled dependencies live in the local _opam switch, not ~/.opam; caching only
+      # ~/.opam would leave every run recompiling the whole tree. Both paths are cached,
+      # keyed on the lockfile, and refreshed automatically in the post-job step.
+      - name: Cache opam switch
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: opam-${{ hashFiles('fox.opam.locked') }}
+          restore-keys: |
+            opam-
+
+      - name: Install opam dependencies
+        run: opam install . --deps-only --with-test --locked
+
+      - name: Build
+        run: opam exec -- dune build @default
+
+      - name: Run tests
+        run: opam exec -- dune runtest
+
+      - name: Check formatting
+        run: opam exec -- dune build @fmt

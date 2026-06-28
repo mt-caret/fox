@@ -1,7 +1,7 @@
-(** An opaque unique identifier.*)
+(** An opaque unique identifier. *)
 
 open! Core
 
-type t = private int [@@deriving equal, sexp_of]
+type t = private int [@@deriving compare, equal, sexp_of]
 
 val create : unit -> t

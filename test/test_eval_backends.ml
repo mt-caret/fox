@@ -3,8 +3,10 @@ open! Fox_core
 open! Base_quickcheck
 
 module Dims = struct
-  type t = int array [@@deriving quickcheck, sexp_of, compare]
+  type t = int iarray [@@deriving sexp_of, compare]
 
+  (* The generator builds a valid (positive, exactly-multiplying) dims array and freezes
+     it; the observer and shrinker defer to the [int array] instances. *)
   let quickcheck_generator =
     Generator.fixed_point (fun quickcheck_generator ->
       let open Generator.Let_syntax in
@@ -18,6 +20,18 @@ module Dims = struct
          | remaining_size ->
            let%map dims = Generator.with_size quickcheck_generator ~size:remaining_size in
            Array.append dims [| this_dim |]))
+    |> Generator.map ~f:Iarray.of_array
+  ;;
+
+  let quickcheck_observer =
+    Observer.unmap [%quickcheck.observer: int array] ~f:Iarray.to_array
+  ;;
+
+  let quickcheck_shrinker =
+    Shrinker.map
+      [%quickcheck.shrinker: int array]
+      ~f:Iarray.of_array
+      ~f_inverse:Iarray.to_array
   ;;
 end
 
@@ -26,7 +40,7 @@ module Tensor = struct
 
   let quickcheck_generator_with_dims ~dims =
     let open Generator.Let_syntax in
-    let total_elements = Array.fold dims ~init:1 ~f:( * ) in
+    let total_elements = Iarray.fold dims ~init:1 ~f:( * ) in
     let%map values =
       List.init total_elements ~f:(fun _ -> Generator.float_inclusive (-100.) 100.)
       |> Generator.all
@@ -44,10 +58,10 @@ module Tensor = struct
     Shrinker.create (fun (Tensor.T tensor) ->
       let dims = Tensor.Typed.dims tensor in
       let sliced_tensors =
-        if Array.length dims > 0
+        if Iarray.length dims > 0
         then
-          Sequence.init dims.(0) ~f:(fun i ->
-            T (Tensor.Typed.left_slice tensor ~indices:[| i |]))
+          Sequence.init dims.:(0) ~f:(fun i ->
+            T (Tensor.Typed.left_slice tensor ~indices:[: i :]))
         else Sequence.empty
       in
       let smaller_tensors =
@@ -179,7 +193,7 @@ let op_generator ~values_by_shape =
          let%bind.Option all_shapes =
            match
              Map.keys values_by_shape
-             |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) = 2)
+             |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) = 2)
            with
            | [] -> None
            | all_shapes -> Some all_shapes
@@ -188,8 +202,8 @@ let op_generator ~values_by_shape =
            List.concat_map all_shapes ~f:(fun lhs_shape ->
              List.filter_map all_shapes ~f:(fun rhs_shape ->
                match lhs_shape, rhs_shape with
-               | { dims = [| _; m |]; type_ = _ }, { dims = [| m' |]; type_ = _ }
-               | { dims = [| _; m |]; type_ = _ }, { dims = [| m'; _ |]; type_ = _ } ->
+               | { dims = [: _; m :]; type_ = _ }, { dims = [: m' :]; type_ = _ }
+               | { dims = [: _; m :]; type_ = _ }, { dims = [: m'; _ :]; type_ = _ } ->
                  Option.some_if (m = m') (lhs_shape, rhs_shape)
                | _ -> None))
          with
@@ -205,7 +219,7 @@ let op_generator ~values_by_shape =
     | Transpose () ->
       (match
          Map.keys values_by_shape
-         |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) = 2)
+         |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) = 2)
        with
        | [] -> return None
        | all_dims ->
@@ -225,7 +239,7 @@ let op_generator ~values_by_shape =
          in
          (match
             Map.keys values_by_shape
-            |> List.filter ~f:(fun shape -> Array.length (Shape.dims shape) > max_index)
+            |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) > max_index)
           with
           | [] -> return None
           | all_shapes ->
@@ -270,6 +284,7 @@ let expr_generator ~op_nums =
   let out = List.hd_exn equations |> Expr.Eq.var in
   Expr.create
     ~parameters:[ arg ]
+    ~consts:Expr.Var.Map.empty
     ~equations:(List.rev equations)
     ~return_vals:[ Expr.Atom.Var out ]
     ~out_tree_def:(Value_tree.Def.leaf ~dims:(Expr.Var.dims out))
@@ -279,7 +294,7 @@ let%expect_test "expr_generator" =
   let random = Splittable_random.of_int 0 in
   for i = 1 to 5 do
     let expr = Generator.generate (expr_generator ~op_nums:i) ~size:6 ~random in
-    Expr.to_string_hum expr |> print_endline;
+    Expr.to_string_hum expr ~value_to_string:Value.to_string |> print_endline;
     print_endline "--------------------------------"
   done;
   [%expect
@@ -333,12 +348,15 @@ let%expect_test "eval expr vs xla" =
     (fun_generator ~op_nums:1)
     ~trials:300
     ~sexp_of:(fun (tensor, expr) ->
-      [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+      [%sexp
+        { tensor : Tensor.t
+        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+        }])
     ~f:(fun (tensor, expr) ->
       let f value = eval_expr' expr value in
       let value = Value.of_tensor tensor in
-      let eval_result = Eval.handle ~f:(fun () -> f value) in
-      let xla_result = Fox_jit.jit' ~f value in
+      let eval_result = eval ~f:(fun () -> f value) in
+      let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
       assert (
         Tensor.allclose
           ~equal_nan:true
@@ -348,14 +366,13 @@ let%expect_test "eval expr vs xla" =
 
 let%expect_test "grad+jit vs grad+eval" =
   let test ~f ~x =
-    Eval.handle ~f:(fun () -> f x) |> [%sexp_of: Value.t] |> print_s;
-    Fox_jit.jit' ~f x |> [%sexp_of: Value.t] |> print_s
+    eval ~f:(fun () -> f x) |> [%sexp_of: Value.t] |> print_s;
+    Staged.unstage (Fox_jit.jit' ~f ()) x |> [%sexp_of: Value.t] |> print_s
   in
   test
     ~f:(fun value -> grad' ~f:(fun value -> Value.O.(value * value)) ~x:value)
     ~x:(Value.of_float 1.);
-  [%expect
-    {|
+  [%expect {|
     (Tensor 2 Float)
     (Tensor 2 Float)
     |}];
@@ -382,12 +399,15 @@ let%expect_test "eval grad expr vs xla" =
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
   Quickcheck.test
     (fun_generator ~op_nums:1)
-    (* TODO: without a periodic [Gc.full_major ()], pthread_create fails with EAGAIN
-       and causes a SIGABRT (at least on macos) when ~trials is set to more than 300.
-       This is likely a result of not properly releasing resources somewhere. *)
+    (* TODO: without a periodic [Gc.full_major ()], pthread_create fails with EAGAIN and
+       causes a SIGABRT (at least on macos) when ~trials is set to more than 300. This is
+       likely a result of not properly releasing resources somewhere. *)
     ~trials:200
     ~sexp_of:(fun (tensor, expr) ->
-      [%sexp { tensor : Tensor.t; expr : string = Expr.to_string_hum expr }])
+      [%sexp
+        { tensor : Tensor.t
+        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+        }])
     ~f:(fun (tensor, expr) ->
       let f value =
         grad'
@@ -398,14 +418,14 @@ let%expect_test "eval grad expr vs xla" =
             | T Float -> Value.sum expr_result
             | T Bool ->
               (* TODO: somehow prevent return type from being a boolean? *)
-              (* We can't really differentiate bool tensors, so we just sum the
-                input instead. *)
+              (* We can't really differentiate bool tensors, so we just sum the input
+                 instead. *)
               Value.sum value)
           ~x:value
       in
       let value = Value.of_tensor tensor in
-      let eval_result = Eval.handle ~f:(fun () -> f value) in
-      let xla_result = Fox_jit.jit' ~f value in
+      let eval_result = eval ~f:(fun () -> f value) in
+      let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
       assert (
         Tensor.allclose
           ~equal_nan:true

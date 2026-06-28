@@ -1,0 +1,4 @@
+pin-depends: [
+  ["xla.dev" "git+https://github.com/mt-caret/ocaml-xla.git#6dffd132a9e1b13b3b8c17f1abae110c40ea6f3c"]
+]
+x-maintenance-intent: ["(latest)"]

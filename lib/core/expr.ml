@@ -1,23 +1,20 @@
 open! Core
 
 module Var = struct
-  module T = struct
-    type t =
-      { name : string
-      ; shape : Shape.t
-      }
-    [@@deriving compare, sexp, fields ~getters]
-  end
+  type t =
+    { name : string
+    ; shape : Shape.t
+    }
+  [@@deriving compare, hash, sexp, fields ~getters]
 
-  include T
-  include Comparable.Make_plain (T)
+  include functor Comparable.Make_plain
 
   let type_id = Type_equal.Id.create ~name:"Var" [%sexp_of: t]
   let dims t = shape t |> Shape.dims
 
   let to_string { name; shape = { dims; type_ } } =
     let dims =
-      Array.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:","
+      Iarray.to_list dims |> List.map ~f:Int.to_string |> String.concat ~sep:","
     in
     let type_ = [%sexp_of: Type.Packed.t] type_ |> Sexp.to_string |> String.lowercase in
     [%string "%{name}[%{dims}]: %{type_}"]
@@ -25,18 +22,27 @@ module Var = struct
 end
 
 module Atom = struct
-  type t =
+  type 'v t =
     | Var of Var.t
-    | Value of Value.t
-  [@@deriving sexp_of]
+    | Value of 'v
+  [@@deriving sexp_of, compare, hash]
 
-  let to_string = function
-    | Var { name; shape = { dims = _; type_ = _ } } -> name
-    | Value value -> Sexp.to_string ([%sexp_of: Value.t] value)
+  let map t ~f =
+    match t with
+    | Var var -> Var var
+    | Value value -> Value (f value)
   ;;
 
-  let of_value (T { value = x; type_id; shape } as value : Value.t) ~(vars : Var.Set.t)
-    : t
+  let to_string t ~value_to_string =
+    match t with
+    | Var var -> Var.name var
+    | Value value -> value_to_string value
+  ;;
+
+  let of_value
+    (T { value = x; type_id; shape; id = _ } as value : Value.t)
+    ~(vars : Var.Set.t)
+    : Value.t t
     =
     match Type_equal.Id.same_witness type_id Var.type_id with
     | Some T ->
@@ -47,7 +53,7 @@ module Atom = struct
     | None -> Value value
   ;;
 
-  let shape = function
+  let shape : Value.t t -> Shape.t = function
     | Var var -> Var.shape var
     | Value value -> Value.shape value
   ;;
@@ -56,40 +62,68 @@ module Atom = struct
 end
 
 module Eq = struct
-  type t =
+  type 'v t =
     { var : Var.t
-    ; op : Atom.t Op.t
+    ; op : 'v Atom.t Op.t
     }
-  [@@deriving sexp_of, fields ~getters]
+  [@@deriving sexp_of, compare, hash, fields ~getters]
 
-  let to_string { var; op } =
-    let op_string = Op.to_string op ~f:Atom.to_string in
+  let map { var; op } ~f = { var; op = Op.map op ~f:(Atom.map ~f) }
+
+  let to_string { var; op } ~value_to_string =
+    let op_string = Op.to_string op ~f:(Atom.to_string ~value_to_string) in
     [%string "%{var#Var} = %{op_string};"]
   ;;
 end
 
-type t =
+type 'a t =
   { parameters : Var.t list
-  ; equations : Eq.t list
-  ; return_vals : Atom.t Nonempty_list.t
+  ; consts : 'a Map.M(Var).t
+  ; equations : 'a Eq.t list
+  ; return_vals : 'a Atom.t Nonempty_list.t
   ; out_tree_def : Value_tree.Def.t
   }
-[@@deriving sexp_of, fields ~getters]
+[@@deriving sexp_of, compare, hash, fields ~getters]
 
-let to_string_hum { parameters; equations; return_vals; out_tree_def = _ } =
-  let parameters = String.concat ~sep:" " (List.map parameters ~f:Var.to_string) in
-  let equations = String.concat ~sep:"\n" (List.map equations ~f:Eq.to_string) in
-  let return_vals =
-    Nonempty_list.to_list return_vals
-    |> List.map ~f:Atom.to_string
-    |> String.concat ~sep:", "
-  in
-  [%string "%{parameters#String} ->\n%{equations#String}\n( %{return_vals} )"]
+let map t ~f =
+  { t with
+    consts = Map.map t.consts ~f
+  ; equations = List.map t.equations ~f:(Eq.map ~f)
+  ; return_vals = Nonempty_list.map t.return_vals ~f:(Atom.map ~f)
+  }
 ;;
 
-let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
-  let env = Var.Set.of_list parameters in
-  let validate_atoms ~env (atoms : Atom.t list) =
+let to_string_hum
+  { parameters; consts; equations; return_vals; out_tree_def = _ }
+  ~value_to_string
+  =
+  let parameters = String.concat ~sep:" " (List.map parameters ~f:Var.to_string) in
+  let consts =
+    match Map.is_empty consts with
+    | true -> ""
+    | false ->
+      let consts =
+        Map.to_alist consts
+        |> List.map ~f:(fun (var, value) ->
+          [%string "  %{var#Var} = %{value_to_string value}"])
+        |> String.concat ~sep:"\n"
+      in
+      [%string "\nconsts:\n%{consts}"]
+  in
+  let equations =
+    String.concat ~sep:"\n" (List.map equations ~f:(Eq.to_string ~value_to_string))
+  in
+  let return_vals =
+    Nonempty_list.to_list return_vals
+    |> List.map ~f:(Atom.to_string ~value_to_string)
+    |> String.concat ~sep:", "
+  in
+  [%string "%{parameters#String} ->%{consts}\n%{equations#String}\n( %{return_vals} )"]
+;;
+
+let validate ({ parameters; consts; equations; return_vals; out_tree_def = _ } as t) =
+  let env = Var.Set.of_list (parameters @ Map.keys consts) in
+  let validate_atoms ~env (atoms : Value.t Atom.t list) =
     match
       List.filter_map atoms ~f:(function
         | Var var -> Some var
@@ -100,7 +134,9 @@ let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
     | missing_vars ->
       raise_s
         [%message
-          "Undefined variable" (missing_vars : Var.t list) ~expr:(to_string_hum t)]
+          "Undefined variable"
+            (missing_vars : Var.t list)
+            ~expr:(to_string_hum t ~value_to_string:Value.to_string)]
   in
   let env =
     List.fold equations ~init:env ~f:(fun env { var; op } ->
@@ -110,8 +146,8 @@ let validate ({ parameters; equations; return_vals; out_tree_def = _ } as t) =
   Nonempty_list.to_list return_vals |> validate_atoms ~env
 ;;
 
-let create ~parameters ~equations ~return_vals ~out_tree_def =
-  let t = { parameters; equations; return_vals; out_tree_def } in
+let create ~parameters ~consts ~equations ~return_vals ~out_tree_def =
+  let t = { parameters; consts; equations; return_vals; out_tree_def } in
   validate t;
   t
 ;;

@@ -1,6 +1,6 @@
 open! Core
 
-type t = int [@@deriving equal, sexp_of]
+type t = int [@@deriving compare, equal, sexp_of]
 
 let create =
   let counter = ref 0 in

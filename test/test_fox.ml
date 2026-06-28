@@ -8,12 +8,12 @@ let f x =
 ;;
 
 let%expect_test "eval" =
-  Eval.handle ~f:(fun () -> f (Value.of_float 3.)) |> [%sexp_of: Value.t] |> print_s;
+  eval ~f:(fun () -> f (Value.of_float 3.)) |> [%sexp_of: Value.t] |> print_s;
   [%expect {| (Tensor 2.7177599838802657 Float) |}]
 ;;
 
 let%expect_test "jvp" =
-  Eval.handle ~f:(fun () ->
+  eval ~f:(fun () ->
     jvp' ~f:Value.sin ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.)
     |> snd
     |> [%sexp_of: Value.t]
@@ -24,12 +24,11 @@ let%expect_test "jvp" =
     (Tensor -0.98999249660044542 Float)
     (Tensor -0.98999249660044542 Float)
     |}];
-  Eval.handle ~f:(fun () ->
-    jvp' ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
+  eval ~f:(fun () -> jvp' ~f ~primal:(Value.of_float 3.) ~tangent:(Value.of_float 1.))
   |> [%sexp_of: Value.t * Value.t]
   |> print_s;
   [%expect {| ((Tensor 2.7177599838802657 Float) (Tensor 2.9799849932008908 Float)) |}];
-  Eval.handle ~f:(fun () ->
+  eval ~f:(fun () ->
     let deriv ~n =
       nth_order_derivative ~n ~f:Value.sin ~x:(Value.of_float 3.)
       |> [%sexp_of: Value.t]
