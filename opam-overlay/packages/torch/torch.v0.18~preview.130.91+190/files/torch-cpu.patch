@@ -1,0 +1,314 @@
+diff -ruN -x _build -x .git torch-orig/src/config/discover.ml torch-patched/src/config/discover.ml
+--- a/src/config/discover.ml
++++ b/src/config/discover.ml
+@@ -22,7 +22,9 @@
+   | None -> f ()
+ ;;
+ 
+-let required_libs = [ "c10"; "torch_cpu"; "torch_cuda"; "torch" ]
++(* CPU-only build: [torch_cuda] is appended by [choose_dynamic_links] only when
++   [libtorch_cuda.so] is actually present, so it must not be unconditionally required. *)
++let required_libs = [ "c10"; "torch_cpu"; "torch" ]
+ 
+ let choose_dynamic_links ~lib_dir =
+   let optional_libs = [ "torch_cuda" ] in
+@@ -144,13 +146,13 @@
+     C.Flags.write_sexp
+       "cxx_flags.sexp"
+       (cxx_abi_flag :: (torch_flags.cflags @ cuda_flags.cflags));
+-    let torch_flags_lib =
+-      if Stdlib.( = ) cuda_flags empty_flags
+-      then torch_flags.libs
+-      else "-Wl,--no-as-needed" :: torch_flags.libs
+-    in
+-    let ocaml_flags =
+-      ocaml_flags_of_c_flags (torch_flags_lib @ conda_libs @ cuda_flags.libs)
+-    in
+-    C.Flags.write_sexp "flags.sexp" ocaml_flags)
++    (* Always force [--no-as-needed]: with CPU libtorch the linker would otherwise drop
++       [-ltorch_cpu] etc. when they appear before the objects that reference them. *)
++    let torch_flags_lib = "-Wl,--no-as-needed" :: torch_flags.libs in
++    let link_flags = torch_flags_lib @ conda_libs @ cuda_flags.libs in
++    C.Flags.write_sexp "flags.sexp" (ocaml_flags_of_c_flags link_flags);
++    (* Also expose the raw link flags as [c_library_flags]; dune records those in the
++       library's metadata and propagates them to executables that depend on it, whereas the
++       [-ccopt ...] flags in [(flags)] above are not replayed to downstream links. *)
++    C.Flags.write_sexp "c_library_flags.sexp" link_flags)
+ ;;
+diff -ruN -x _build -x .git torch-orig/src/wrapper/dune torch-patched/src/wrapper/dune
+--- a/src/wrapper/dune
++++ b/src/wrapper/dune
+@@ -8,7 +8,10 @@
+    (:include cxx_flags.sexp)))
+  (name torch_core)
+  (public_name torch.core)
+- (c_library_flags :standard -lstdc++)
++ (c_library_flags
++  :standard
++  -lstdc++
++  (:include c_library_flags.sexp))
+  (flags
+   :standard
+   (:include flags.sexp))
+@@ -32,7 +35,7 @@
+   (bash "echo \"#define OCAML_DEPENDENT_MEM_TRACKING true\" > %{targets}")))
+ 
+ (rule
+- (targets cxx_flags.sexp flags.sexp)
++ (targets cxx_flags.sexp flags.sexp c_library_flags.sexp)
+  (deps ../config/discover.exe)
+  (action
+   (bash %{deps})))
+diff -ruN -x _build -x .git torch-orig/src/wrapper/torch_api.cpp torch-patched/src/wrapper/torch_api.cpp
+--- a/src/wrapper/torch_api.cpp
++++ b/src/wrapper/torch_api.cpp
+@@ -2,14 +2,14 @@
+ #include <torch/torch.h>
+ #include <ATen/autocast_mode.h>
+ #include <torch/script.h>
+-#include <torch/csrc/inductor/aoti_runner/model_container_runner_cuda.h>
+-#include <torch/csrc/cuda/memory_snapshot.h>
++// CPU-only build: the CUDA-only headers (AOTI CUDA runner, CUDA memory snapshot) are
++// dropped because they pull in <cuda_runtime_api.h>, which is absent without a CUDA
++// toolkit. The functions that used them are stubbed out below.
+ #include <stdexcept>
+ #include <vector>
+ #include <caml/fail.h>
+ #include <caml/memory.h>
+ #undef invalid_argument
+-#include <cuda_runtime.h>
+ #include "torch_api.h"
+ #include "ctypes_cstubs_internals.h"
+ #include "ocaml_runtime_props.h"
+@@ -773,39 +773,26 @@
+   ~no_runtime_system() { caml_acquire_runtime_system(); }
+ };
+ 
++// CPU-only build: the AOTI CUDA runner lives in libtorch_cuda, which is absent from CPU
++// libtorch, so these entry points fail loudly rather than link against missing symbols.
+ aoti_runner_cuda aoti_runner_cuda_load(char *filename, int num_concurrent_executions,
+                                        int device, char *cubin_dir) {
+-  PROTECT({
+-    // Release the runtime lock because loading the weights can be slow. Ctypes
+-    // copies the strings off of the OCaml heap before passing them here, so
+-    // it's safe to use them without the lock.
+-    no_runtime_system nosys;
+-
+-    at::Device torch_device = device_of_int(device);
+-
+-    return new torch::inductor::AOTIModelContainerRunnerCuda(
+-        filename, num_concurrent_executions, torch_device.str(), cubin_dir,
+-        true /* run_single_threaded */);
+-  })
++  (void)filename;
++  (void)num_concurrent_executions;
++  (void)device;
++  (void)cubin_dir;
++  caml_failwith("torch: AOTI CUDA runner unavailable in this CPU-only build");
+   return nullptr;
+ }
+ 
+ void aoti_runner_cuda_run_unit(aoti_runner_cuda r, gc_tensor *inputs_ptr, int ninputs) {
+-  PROTECT(
+-      std::vector<torch::Tensor> inputs; inputs.reserve(ninputs);
+-      for (int i = 0; i < ninputs; ++i) { // extract and convert the inputs into a vector
+-        inputs.push_back(tensor_from_ocaml(inputs_ptr[i]));
+-      }
+-      // release the runtime lock because running the aoti kernel could take several ms
+-      {
+-        no_runtime_system nosys;
+-        r->run(inputs);
+-      }
+-      //
+-      return;)
++  (void)r;
++  (void)inputs_ptr;
++  (void)ninputs;
++  caml_failwith("torch: AOTI CUDA runner unavailable in this CPU-only build");
+ }
+ 
+-void aoti_runner_cuda_free(aoti_runner_cuda r) { delete r; }
++void aoti_runner_cuda_free(aoti_runner_cuda r) { (void)r; }
+ 
+ ivalue ati_tensor(gc_tensor t) {
+   PROTECT(return new torch::jit::IValue(tensor_from_ocaml(t));)
+@@ -1026,13 +1013,12 @@
+ 
+ void at_set_graph_executor_optimize(bool o) { torch::jit::setGraphExecutorOptimize(o); }
+ 
+-void torch_record_memory_history() { torch::cuda::_record_memory_history(); }
++// CPU-only build: CUDA memory-history APIs live in libtorch_cuda, absent from CPU libtorch.
++void torch_record_memory_history() {}
+ 
+ void torch_save_memory_snapshot_pickled(char *output_filepath) {
+-  auto snapshot_data = torch::cuda::_memory_snapshot_pickled();
+-  PROTECT(std::ofstream snapshot_file(output_filepath, std::ios_base::binary);
+-          snapshot_file.write(snapshot_data.data(), snapshot_data.size()); return;)
+-  return;
++  (void)output_filepath;
++  caml_failwith("torch: CUDA memory snapshot unavailable in this CPU-only build");
+ }
+ 
+ 
+diff -ruN -x _build -x .git torch-orig/src/wrapper/torch_api.h torch-patched/src/wrapper/torch_api.h
+--- a/src/wrapper/torch_api.h
++++ b/src/wrapper/torch_api.h
+@@ -9,7 +9,8 @@
+ typedef torch::Scalar *scalar;
+ typedef torch::optim::Optimizer *optimizer;
+ typedef torch::jit::script::Module *module;
+-typedef torch::inductor::AOTIModelContainerRunnerCuda *aoti_runner_cuda;
++// CPU-only build: the AOTI CUDA runner type is unavailable, so this handle is opaque.
++typedef void *aoti_runner_cuda;
+ typedef torch::jit::IValue *ivalue;
+ typedef torch::TensorImpl *raw_tensor;
+ typedef torch::TensorImpl *gc_tensor;
+diff -ruN -x _build -x .git torch-orig/src/wrapper_refcounted/dune torch-patched/src/wrapper_refcounted/dune
+--- a/src/wrapper_refcounted/dune
++++ b/src/wrapper_refcounted/dune
+@@ -12,7 +12,10 @@
+    (:include cxx_flags.sexp)))
+  (name torch_refcounted_core)
+  (public_name torch.refcounted.core)
+- (c_library_flags :standard -lstdc++)
++ (c_library_flags
++  :standard
++  -lstdc++
++  (:include c_library_flags.sexp))
+  (flags
+   :standard
+   (:include flags.sexp))
+@@ -91,7 +94,7 @@
+   (bash "echo \"#define OCAML_DEPENDENT_MEM_TRACKING true\" > %{targets}")))
+ 
+ (rule
+- (targets cxx_flags.sexp flags.sexp)
++ (targets cxx_flags.sexp flags.sexp c_library_flags.sexp)
+  (deps ../config/discover.exe)
+  (action
+   (bash %{deps})))
+diff -ruN -x _build -x .git torch-orig/src/wrapper_refcounted/torch_api.cpp torch-patched/src/wrapper_refcounted/torch_api.cpp
+--- a/src/wrapper_refcounted/torch_api.cpp
++++ b/src/wrapper_refcounted/torch_api.cpp
+@@ -2,14 +2,12 @@
+ #include <torch/torch.h>
+ #include <ATen/autocast_mode.h>
+ #include <torch/script.h>
+-#include <torch/csrc/inductor/aoti_runner/model_container_runner_cuda.h>
+-#include <torch/csrc/cuda/memory_snapshot.h>
++// CPU-only build: CUDA-only headers dropped (see comment in src/wrapper/torch_api.cpp).
+ #include <stdexcept>
+ #include <vector>
+ #include <caml/fail.h>
+ #include <caml/memory.h>
+ #undef invalid_argument
+-#include <cuda_runtime.h>
+ #include "torch_api.h"
+ #include <caml/mlvalues.h>
+ #include <caml/alloc.h>
+@@ -921,47 +919,24 @@
+   ~no_runtime_system() { caml_acquire_runtime_system(); }
+ };
+ 
++// CPU-only build: the AOTI CUDA runner lives in libtorch_cuda, which is absent from CPU
++// libtorch, so these entry points fail loudly rather than link against missing symbols.
+ value aoti_runner_cuda_load(const char *filename_cstr, int num_concurrent_executions,
+                             int device, const char *cubin_dir_cstr) {
+-  CAMLparam0();
+-  PROTECT({
+-    std::string filename = filename_cstr;
+-    std::string cubin_dir = cubin_dir_cstr;
+-    torch::inductor::AOTIModelContainerRunnerCuda *runner = nullptr;
+-    // Release the runtime lock because loading the weights can be slow. But
+-    // first make copies of the strings, so it's safe to use them without the
+-    // lock. We must not allocate in this section, so [pointer_to_custom_val]
+-    // has to be called outside of it.
+-    {
+-      no_runtime_system nosys;
+-      at::Device torch_device = device_of_int(device);
+-      runner = new torch::inductor::AOTIModelContainerRunnerCuda(
+-          filename, num_concurrent_executions, torch_device.str(), cubin_dir,
+-          true /* run_single_threaded */);
+-    }
+-    CAMLreturn(pointer_to_custom_val(runner));
+-  })
++  (void)filename_cstr;
++  (void)num_concurrent_executions;
++  (void)device;
++  (void)cubin_dir_cstr;
++  caml_failwith("torch: AOTI CUDA runner unavailable in this CPU-only build");
+ }
+ 
+ void aoti_runner_cuda_run_unit(value r, value inputs_list) {
+-  CAMLparam2(r, inputs_list);
+-  PROTECT(
+-      std::vector<torch::Tensor> inputs = of_ocaml_tensor_list(inputs_list);
+-      // release the runtime lock because running the aoti kernel could take several ms
+-      {
+-        no_runtime_system nosys;
+-        pointer_of_custom_val<torch::inductor::AOTIModelContainerRunnerCuda>(r)->run(
+-            inputs);
+-      }
+-      //
+-      CAMLreturn0;)
++  (void)r;
++  (void)inputs_list;
++  caml_failwith("torch: AOTI CUDA runner unavailable in this CPU-only build");
+ }
+ 
+-void aoti_runner_cuda_free(value r) {
+-  CAMLparam1(r);
+-  delete pointer_of_custom_val<torch::inductor::AOTIModelContainerRunnerCuda>(r);
+-  CAMLreturn0;
+-}
++void aoti_runner_cuda_free(value r) { (void)r; }
+ 
+ void at_set_graph_executor_optimize(bool o) { torch::jit::setGraphExecutorOptimize(o); }
+ 
+@@ -973,10 +948,10 @@
+           CAMLreturn(rc_tensor_to_ocaml(result));)
+ }
+ 
+-void torch_record_memory_history() { torch::cuda::_record_memory_history(); }
++// CPU-only build: CUDA memory-history APIs live in libtorch_cuda, absent from CPU libtorch.
++void torch_record_memory_history() {}
+ 
+ void torch_save_memory_snapshot_pickled(const char *output_filepath) {
+-  auto snapshot_data = torch::cuda::_memory_snapshot_pickled();
+-  PROTECT(std::ofstream snapshot_file(output_filepath, std::ios_base::binary);
+-          snapshot_file.write(snapshot_data.data(), snapshot_data.size());)
++  (void)output_filepath;
++  caml_failwith("torch: CUDA memory snapshot unavailable in this CPU-only build");
+ }
+diff -ruN -x _build -x .git torch-orig/src/wrapper_refcounted/torch_api_for_generated.hpp torch-patched/src/wrapper_refcounted/torch_api_for_generated.hpp
+--- a/src/wrapper_refcounted/torch_api_for_generated.hpp
++++ b/src/wrapper_refcounted/torch_api_for_generated.hpp
+@@ -2,14 +2,12 @@
+ #include <torch/torch.h>
+ #include <ATen/autocast_mode.h>
+ #include <torch/script.h>
+-#include <torch/csrc/inductor/aoti_runner/model_container_runner_cuda.h>
+-#include <torch/csrc/cuda/memory_snapshot.h>
++// CPU-only build: CUDA-only headers dropped (see comment in src/wrapper/torch_api.cpp).
+ #include <stdexcept>
+ #include <vector>
+ #include <caml/fail.h>
+ #include <caml/memory.h>
+ #undef invalid_argument
+-#include <cuda_runtime.h>
+ #include "torch_api.h"
+ #include <caml/mlvalues.h>
+ #include <caml/alloc.h>
+diff -ruN -x _build -x .git torch-orig/src/wrapper_refcounted/torch_api.h torch-patched/src/wrapper_refcounted/torch_api.h
+--- a/src/wrapper_refcounted/torch_api.h
++++ b/src/wrapper_refcounted/torch_api.h
+@@ -9,7 +9,8 @@
+ typedef torch::Scalar *scalar;
+ typedef torch::optim::Optimizer *optimizer;
+ typedef torch::jit::script::Module *module;
+-typedef torch::inductor::AOTIModelContainerRunnerCuda *aoti_runner_cuda;
++// CPU-only build: the AOTI CUDA runner type is unavailable, so this handle is opaque.
++typedef void *aoti_runner_cuda;
+ typedef torch::jit::IValue *ivalue;
+ typedef torch::TensorImpl *raw_tensor;
+ typedef torch::TensorImpl *gc_tensor;

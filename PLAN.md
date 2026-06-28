@@ -125,9 +125,22 @@ The switch is `ocaml-variants.5.2.0+ox` (OxCaml). `dune build` uses this worktre
 - **CPU patch:** the fork's `torch_api.cpp`/`.h` (and the `wrapper_refcounted` twins)
   unconditionally include CUDA-only headers (`model_container_runner_cuda.h`,
   `cuda/memory_snapshot.h`, `<cuda_runtime.h>`), which fail without a CUDA toolkit, and
-  reference symbols only in `libtorch_cuda` (absent from CPU libtorch). Fix: pin torch to a
-  patched source at `/home/ubuntu/dev/torch-patched` that drops those includes and stubs the
-  AOTI-CUDA runner + CUDA memory-snapshot entry points (`caml_failwith`), typedef'ing the
-  CUDA runner handle to `void *`. `torch::cuda::{device_count,is_available,cudnn_is_available}`
-  and the autocast calls remain (present in libtorch_cpu 2.7.1). Pinning torch also pulls
-  `ctypes` 0.24.0+ox -> 0.23.0+ox (upstream torch.opam bound); harmless in the isolated switch.
+  reference symbols only in `libtorch_cuda` (absent from CPU libtorch). Also `discover.ml`
+  hardcodes `-ltorch_cuda` and only forces `--no-as-needed` when CUDA is present, and puts the
+  libtorch link flags in `(flags)` (which dune doesn't replay to downstream executables). Fix:
+  a patch that drops those includes, stubs the AOTI-CUDA runner + CUDA memory-snapshot entry
+  points (`caml_failwith`), typedefs the CUDA runner handle to `void *`, drops `torch_cuda`
+  from the required libs, always passes `--no-as-needed`, and emits the libtorch link flags as
+  `c_library_flags` so they propagate to downstream links.
+  `torch::cuda::{device_count,is_available,cudnn_is_available}` and the autocast calls remain
+  (present in libtorch_cpu 2.7.1). torch also pulls `ctypes` 0.24.0+ox -> 0.23.0+ox; harmless
+  in the isolated switch.
+
+### Reproducibility (overlay + lockfile)
+- The patch is captured as `opam-overlay/packages/torch/.../files/torch-cpu.patch`, applied by
+  a local opam-repository overlay (`opam-overlay/`) whose `torch` package = the `ox` repo's
+  definition + `patches:` (fetches the upstream tarball by checksum and applies the patch — no
+  vendored sources). `fox.opam.locked` pins every dep, now including `torch` and `ctypes`
+  0.23.x. Reproduce with the overlay out-ranking `ox` plus `opam install . --locked`; see
+  `lib/torch/README.md`. (Build verified by re-deriving the patched torch from upstream + the
+  committed patch and running the full test suite green.)
