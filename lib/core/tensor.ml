@@ -624,6 +624,12 @@ module Private = struct
     bigarray
   ;;
 
+  let to_char_bigarray (T { bigarray; mapping = Bool } : bool Typed.t)
+    : (char, Bigarray.int8_unsigned_elt, _) Bigarray.Genarray.t
+    =
+    bigarray
+  ;;
+
   let of_float_bigarray bigarray = Typed.T { bigarray; mapping = Float }
   let of_char_bigarray bigarray = Typed.T { bigarray; mapping = Bool }
 end

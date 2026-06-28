@@ -27,6 +27,7 @@
   ppx_typed_fields
   splittable_random
   xla
+  torch
   (ocamlformat :with-dev-setup)
   (odoc
    (or :with-doc :with-dev-setup))

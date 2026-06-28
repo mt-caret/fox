@@ -18,6 +18,7 @@ depends: [
   "ppx_typed_fields"
   "splittable_random"
   "xla"
+  "torch"
   "ocamlformat" {with-dev-setup}
   "odoc" {with-doc | with-dev-setup}
   "utop" {with-dev-setup}
