@@ -206,38 +206,39 @@ let infer_shape (t : Shape.t t) : Shape.t Or_error.t =
       match dims_to_sum with
       | `All -> Ok (if keep_dims then Iarray.map dims ~f:(fun _ -> 1) else [::])
       | `Just dims_to_sum ->
+        let dims_length = Iarray.length dims in
+        (* Validate bounds, then normalize negative dims, then reject duplicates - the
+           duplicate check must run *after* normalization so that sign-aliased dims (e.g.
+           0 and -rank on the same axis) are caught, not just literal repeats. *)
         let%bind.Or_error () =
-          if Nonempty_list.to_list dims_to_sum |> List.contains_dup ~compare:Int.compare
+          match
+            Nonempty_list.for_all dims_to_sum ~f:(fun dim ->
+              dim < dims_length && dims_length + dim >= 0)
+          with
+          | true -> Ok ()
+          | false ->
+            Or_error.error_s
+              [%message "infer_dims: dims out of bounds" ~op:(t : Shape.t t)]
+        in
+        let normalized_dims =
+          Nonempty_list.map dims_to_sum ~f:(fun dim ->
+            if dim < 0 then dims_length + dim else dim)
+        in
+        let%map.Or_error () =
+          if Nonempty_list.to_list normalized_dims
+             |> List.contains_dup ~compare:Int.compare
           then
             Or_error.error_s
               [%message
                 "infer_dims: Sum: duplicate reduction dimension" ~op:(t : Shape.t t)]
           else Ok ()
         in
-        let dims_length = Iarray.length dims in
-        (match
-           Nonempty_list.for_all dims_to_sum ~f:(fun dim ->
-             dim < dims_length || dims_length + dim >= 0)
-         with
-         | false ->
-           Or_error.error_s
-             [%message "infer_dims: dims out of bounds" ~op:(t : Shape.t t)]
-         | true ->
-           let dims =
-             let dims_to_sum =
-               Nonempty_list.map dims_to_sum ~f:(fun dim ->
-                 if dim < 0 then dims_length + dim else dim)
-               |> Nonempty_list.to_list
-               |> Int.Set.of_list
-             in
-             if keep_dims
-             then
-               Iarray.mapi dims ~f:(fun index dim ->
-                 if Set.mem dims_to_sum index then 1 else dim)
-             else
-               Iarray.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
-           in
-           Ok dims)
+        let dims_to_sum = Nonempty_list.to_list normalized_dims |> Int.Set.of_list in
+        if keep_dims
+        then
+          Iarray.mapi dims ~f:(fun index dim ->
+            if Set.mem dims_to_sum index then 1 else dim)
+        else Iarray.filteri dims ~f:(fun index _dim -> not (Set.mem dims_to_sum index))
     in
     { Shape.dims; type_ = T Float }
   | Broadcast { value = { dims = from_dims; type_ }; dims = to_dims } ->
