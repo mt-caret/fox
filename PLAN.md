@@ -132,4 +132,26 @@ Each is a lead to investigate, not a confirmed bug:
   typing.
 - `test/test_gradcheck.ml` — central-difference gradient-check harness + battery over every
   op and several compositions (validates the vjp rules independent of jvp).
-- `test/test_eval_backends.ml` — (see below) broadened differential testing.
+- `test/test_eval_backends.ml` — broadened differential testing:
+  - Multi-op random programs (`op_nums` 1..4) instead of only single ops, for both the
+    forward (eval vs XLA) and the gradient (grad eval vs XLA) differential tests.
+  - `Sum` now generates `keep_dims=false` as well as `true` (was hardcoded to `true`).
+  - Periodic `Gc.full_major ()` so the XLA thread leak doesn't hit `pthread_create` EAGAIN
+    over the larger trial count.
+
+### Test-harness issues the broadening surfaced (fixed in the test, not the library)
+
+- **Generator built invalid `sum`/`matmul` ops once bool intermediates existed.** With
+  multi-op programs, `eq`/`gt`/`lt` produce bool shapes; the `Sum`/`Matmul` generator arms
+  picked operand shapes without checking `Op.infer_shape`, so they could build a float-only
+  op over a bool operand and `infer_shape_exn` raised during generation. Fixed by filtering
+  candidate shapes through `Op.infer_shape` (the `Unary`/`Binary`/`Broadcast`/`Reshape` arms
+  already did this).
+- **Differential equality used an absolute tolerance.** `Tensor.allclose` compares via
+  `Float.robustly_compare` (absolute 1e-7). The eager and XLA backends accumulate reductions
+  in different orders, so large-magnitude results like `sum (exp x)` (≈1e42) legitimately
+  differ by ~1 ULP (~1e26 absolute), which the absolute tolerance flags as a mismatch.
+  Confirmed it is purely summation order: `transpose` and `exp` agree bit-for-bit, only the
+  final `sum` differs in the last ULP. Fixed by comparing with a relative tolerance in the
+  differential tests (`Tensor.allclose` left unchanged, as bool/nan/inf handling relies on
+  it). This is not a fox bug — it is expected floating-point behavior.

@@ -193,7 +193,12 @@ let op_generator ~values_by_shape =
          let%bind.Option all_shapes =
            match
              Map.keys values_by_shape
-             |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) = 2)
+             |> List.filter ~f:(fun shape ->
+               Iarray.length (Shape.dims shape) = 2
+               &&
+               match Shape.type_ shape with
+               | T Float -> true
+               | T Bool -> false)
            with
            | [] -> None
            | all_shapes -> Some all_shapes
@@ -225,28 +230,22 @@ let op_generator ~values_by_shape =
        | all_dims ->
          let%map value = choose all_dims >>| Map.find_exn values_by_shape >>= choose in
          Some (Op.Transpose value))
-    | Sum { value = (); dims; keep_dims = _ } ->
-      (match dims with
-       | `All ->
+    | Sum { value = (); dims; keep_dims } ->
+      (* Filter to operand shapes for which the sum is actually valid - this rejects bool
+         shapes (sum is float-only) and, for [`Just], out-of-bounds reduction dims. *)
+      let valid_shapes =
+        Map.keys values_by_shape
+        |> List.filter ~f:(fun shape ->
+          Fox_core.Op.infer_shape (Op.Sum { value = shape; dims; keep_dims })
+          |> Or_error.is_ok)
+      in
+      (match valid_shapes with
+       | [] -> return None
+       | valid_shapes ->
          let%map value =
-           choose (Map.keys values_by_shape) >>| Map.find_exn values_by_shape >>= choose
+           choose valid_shapes >>| Map.find_exn values_by_shape >>= choose
          in
-         Some (Op.Sum { value; dims = `All; keep_dims = true })
-       | `Just dims ->
-         let max_index =
-           Nonempty_list.map dims ~f:(fun dim -> if dim < 0 then -dim - 1 else dim)
-           |> Nonempty_list.max_elt' ~compare:Int.compare
-         in
-         (match
-            Map.keys values_by_shape
-            |> List.filter ~f:(fun shape -> Iarray.length (Shape.dims shape) > max_index)
-          with
-          | [] -> return None
-          | all_shapes ->
-            let%map value =
-              choose all_shapes >>| Map.find_exn values_by_shape >>= choose
-            in
-            Some (Op.Sum { value; dims = `Just dims; keep_dims = true })))
+         Some (Op.Sum { value; dims; keep_dims }))
     | (Broadcast { value = (); dims = _ } | Reshape { value = (); dims = _ }) as op ->
       (match
          Map.keys values_by_shape
@@ -342,26 +341,55 @@ let fun_generator ~op_nums =
   | _ -> failwith "fun_generator: expected 1 parameter"
 ;;
 
+(* XLA leaks a few threads per compiled executable; without a periodic [Gc.full_major ()]
+   to run finalizers, pthread_create eventually fails with EAGAIN. *)
+let gc_every = 50
+
+(* The eager and XLA backends accumulate reductions in different orders, so
+   large-magnitude results (e.g. [sum (exp x)]) legitimately differ by a few ULPs.
+   [Tensor.allclose] uses [Float.robustly_compare], an *absolute* 1e-7 tolerance, which
+   those differences blow past once values are large. Compare with a relative tolerance
+   instead. [Tensor.allclose] still handles bool tensors, nan (via [equal_nan]), and
+   matching infinities. *)
+let agree a b =
+  Tensor.allclose ~equal_nan:true a b
+  ||
+  match Tensor.type_ a, Tensor.type_ b with
+  | T Float, T Float when [%equal: int iarray] (Tensor.dims a) (Tensor.dims b) ->
+    let flat t = Tensor.reshape t ~dims:[: Tensor.length t :] in
+    let a = flat a
+    and b = flat b in
+    List.for_all
+      (List.init (Tensor.length a) ~f:Fn.id)
+      ~f:(fun i ->
+        let x = Tensor.get_exn Float a [: i :] in
+        let y = Tensor.get_exn Float b [: i :] in
+        Float.( <= ) (Float.abs (x -. y)) (1e-6 +. (1e-5 *. Float.abs y)))
+  | _, _ -> false
+;;
+
 let%expect_test "eval expr vs xla" =
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
-  Quickcheck.test
-    (fun_generator ~op_nums:1)
-    ~trials:300
-    ~sexp_of:(fun (tensor, expr) ->
-      [%sexp
-        { tensor : Tensor.t
-        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
-        }])
-    ~f:(fun (tensor, expr) ->
-      let f value = eval_expr' expr value in
-      let value = Value.of_tensor tensor in
-      let eval_result = eval ~f:(fun () -> f value) in
-      let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
-      assert (
-        Tensor.allclose
-          ~equal_nan:true
-          (Value.to_tensor_exn eval_result)
-          (Value.to_tensor_exn xla_result)))
+  let trial = ref 0 in
+  (* Multi-op programs (not just single ops) exercise compositions across both backends. *)
+  List.iter [ 1; 2; 3; 4 ] ~f:(fun op_nums ->
+    Quickcheck.test
+      (fun_generator ~op_nums)
+      ~trials:100
+      ~sexp_of:(fun (tensor, expr) ->
+        [%sexp
+          { op_nums : int
+          ; tensor : Tensor.t
+          ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+          }])
+      ~f:(fun (tensor, expr) ->
+        incr trial;
+        if !trial % gc_every = 0 then Gc.full_major ();
+        let f value = eval_expr' expr value in
+        let value = Value.of_tensor tensor in
+        let eval_result = eval ~f:(fun () -> f value) in
+        let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
+        assert (agree (Value.to_tensor_exn eval_result) (Value.to_tensor_exn xla_result))))
 ;;
 
 let%expect_test "grad+jit vs grad+eval" =
@@ -397,38 +425,36 @@ let%expect_test "grad+jit vs grad+eval" =
 
 let%expect_test "eval grad expr vs xla" =
   Core_unix.putenv ~key:"TF_CPP_MIN_LOG_LEVEL" ~data:"2";
-  Quickcheck.test
-    (fun_generator ~op_nums:1)
-    (* TODO: without a periodic [Gc.full_major ()], pthread_create fails with EAGAIN and
-       causes a SIGABRT (at least on macos) when ~trials is set to more than 300. This is
-       likely a result of not properly releasing resources somewhere. *)
-    ~trials:200
-    ~sexp_of:(fun (tensor, expr) ->
-      [%sexp
-        { tensor : Tensor.t
-        ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
-        }])
-    ~f:(fun (tensor, expr) ->
-      let f value =
-        grad'
-          ~f:(fun value ->
-            let expr_result = eval_expr' expr value in
-            let expr_result_shape = Value.shape expr_result in
-            match Shape.type_ expr_result_shape with
-            | T Float -> Value.sum expr_result
-            | T Bool ->
-              (* TODO: somehow prevent return type from being a boolean? *)
-              (* We can't really differentiate bool tensors, so we just sum the input
-                 instead. *)
-              Value.sum value)
-          ~x:value
-      in
-      let value = Value.of_tensor tensor in
-      let eval_result = eval ~f:(fun () -> f value) in
-      let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
-      assert (
-        Tensor.allclose
-          ~equal_nan:true
-          (Value.to_tensor_exn eval_result)
-          (Value.to_tensor_exn xla_result)))
+  let trial = ref 0 in
+  List.iter [ 1; 2; 3; 4 ] ~f:(fun op_nums ->
+    Quickcheck.test
+      (fun_generator ~op_nums)
+      ~trials:100
+      ~sexp_of:(fun (tensor, expr) ->
+        [%sexp
+          { op_nums : int
+          ; tensor : Tensor.t
+          ; expr : string = Expr.to_string_hum expr ~value_to_string:Value.to_string
+          }])
+      ~f:(fun (tensor, expr) ->
+        incr trial;
+        if !trial % gc_every = 0 then Gc.full_major ();
+        let f value =
+          grad'
+            ~f:(fun value ->
+              let expr_result = eval_expr' expr value in
+              let expr_result_shape = Value.shape expr_result in
+              match Shape.type_ expr_result_shape with
+              | T Float -> Value.sum expr_result
+              | T Bool ->
+                (* TODO: somehow prevent return type from being a boolean? *)
+                (* We can't really differentiate bool tensors, so we just sum the input
+                   instead. *)
+                Value.sum value)
+            ~x:value
+        in
+        let value = Value.of_tensor tensor in
+        let eval_result = eval ~f:(fun () -> f value) in
+        let xla_result = Staged.unstage (Fox_jit.jit' ~f ()) value in
+        assert (agree (Value.to_tensor_exn eval_result) (Value.to_tensor_exn xla_result))))
 ;;
