@@ -430,6 +430,29 @@ let%expect_test "torch backend round-trips bool intermediates" =
   [%expect {| (((true false) (true false))) |}]
 ;;
 
+(* A deterministic check over the structurally non-trivial ops (matmul, transpose, and the
+   reductions with [`Just]/negative dims/[keep_dims]) so coverage of these does not rely
+   on quickcheck's random op draws. Each result is also cross-checked against the eager
+   backend. *)
+let%expect_test "torch backend matches eager on fixed matmul/transpose/sum" =
+  let a = Tensor.of_list2_exn Float [ [ 1.; 2. ]; [ 3.; 4. ] ] in
+  let run f =
+    let value = Value.of_tensor a in
+    let eager = eval ~f:(fun () -> f value) |> Value.to_tensor_exn in
+    let torch = Fox_torch.Pytorch.handle ~f:(fun () -> f value) |> Value.to_tensor_exn in
+    assert (tensors_close eager torch);
+    print_s [%sexp (eager : Tensor.t)]
+  in
+  run (fun v -> Value.matmul v (Value.transpose v));
+  [%expect {| ((5 11) (11 25)) |}];
+  run (fun v -> Value.sum v ~dims:(`Just [ 0 ]) ~keep_dims:false);
+  [%expect {| (4 6) |}];
+  run (fun v -> Value.sum v ~dims:(`Just [ -1 ]) ~keep_dims:true);
+  [%expect {| ((3) (7)) |}];
+  run (fun v -> Value.mean v ~keep_dims:false);
+  [%expect {| 2.5 |}]
+;;
+
 let%expect_test "grad+jit vs grad+eval" =
   let test ~f ~x =
     eval ~f:(fun () -> f x) |> [%sexp_of: Value.t] |> print_s;
