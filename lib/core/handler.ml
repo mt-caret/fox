@@ -282,7 +282,20 @@ let eval_expr_transposed (expr : Value.t Expr.t) args ~cotangents =
         | Binary (Div, Var var, Value v) ->
           accum_gradient ~ct_env var (Value.div cotangent v)
         | Matmul (Var var, Value v) ->
-          accum_gradient ~ct_env var (Value.matmul cotangent (Value.transpose v))
+          (* [y = x @ v]. For a matrix [v] this is [x_ct = y_ct @ v^T]. When [v] is a
+             vector [m] the forward op is [x[n,m] @ v[m] = y[n]], whose transpose is the
+             outer product [x_ct[n,m] = y_ct[n] (x) v[m]]; [transpose] only handles rank
+             2, so express it as [y_ct[n,1] @ v[1,m]] instead. *)
+          let grad =
+            match Value.dims v with
+            | [: m :] ->
+              let n = (Value.dims cotangent).:(0) in
+              Value.matmul
+                (Value.reshape cotangent ~dims:[: n; 1 :])
+                (Value.reshape v ~dims:[: 1; m :])
+            | _ -> Value.matmul cotangent (Value.transpose v)
+          in
+          accum_gradient ~ct_env var grad
         | Matmul (Value v, Var var) ->
           accum_gradient ~ct_env var (Value.matmul (Value.transpose v) cotangent)
         | Transpose (Var var) -> accum_gradient ~ct_env var (Value.transpose cotangent)
